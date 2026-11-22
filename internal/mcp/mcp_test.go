@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -134,5 +135,35 @@ func TestMCPClientTimeout(t *testing.T) {
 	got := c.CallTool("echo", map[string]any{"text": "hi"}, 300*time.Millisecond)
 	if !strings.HasPrefix(got, "Error:") {
 		t.Errorf("超时应返回 Error，得到 %q", got)
+	}
+}
+
+// TestMCPClientConcurrent：并发 CallTool 必须都成功——串行契约由 Client 内部保证，
+// 调用方无需知道隐藏顺序规则。（无互斥时 nextID 竞态 + 响应互吞，-race 下必失败。）
+func TestMCPClientConcurrent(t *testing.T) {
+	cfg := ServerConfig{
+		Command: os.Args[0],
+		Args:    []string{"-test.run=TestHelperProcess", "--"},
+		Env:     map[string]string{"NANOAGENT_MCP_FAKE_SERVER": "1"},
+	}
+	c, _, err := Start("fake", cfg, 10*time.Second)
+	if err != nil {
+		t.Fatalf("mcpStart: %v", err)
+	}
+	defer Shutdown(c)
+	var wg sync.WaitGroup
+	results := make([]string, 2)
+	for i, text := range []string{"one", "two"} {
+		wg.Add(1)
+		go func(i int, text string) {
+			defer wg.Done()
+			results[i] = c.CallTool("echo", map[string]any{"text": text}, 5*time.Second)
+		}(i, text)
+	}
+	wg.Wait()
+	for i, text := range []string{"one", "two"} {
+		if want := "ECHO: " + text; results[i] != want {
+			t.Errorf("并发调用 %d = %q, want %q", i, results[i], want)
+		}
 	}
 }

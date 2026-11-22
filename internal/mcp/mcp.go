@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"go-agent/internal/config"
@@ -65,8 +66,9 @@ type rpcResponse struct {
 }
 
 // Client 是一个通过 stdio 与 MCP server 子进程通信的客户端（JSON-RPC 2.0，换行分隔帧）。
-// 请求严格串行：request 写入后等待读协程转发的同 id 响应，超时返回错误。
+// request 全程持互斥：并发调用按序执行，串行契约由实现保证而非调用方自觉。
 type Client struct {
+	mu        sync.Mutex
 	name      string
 	cmd       *exec.Cmd
 	stdin     io.WriteCloser
@@ -159,7 +161,10 @@ func Start(name string, cfg ServerConfig, timeout time.Duration) (*Client, []Too
 }
 
 // request 发送 JSON-RPC 请求并等待同 id 响应；通知与乱序响应被跳过；超时返回错误。
+// 全程持锁：同一时刻只有一个请求在途。
 func (c *Client) request(method string, params any, timeout time.Duration) (json.RawMessage, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.nextID++
 	id := c.nextID
 	frame, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
