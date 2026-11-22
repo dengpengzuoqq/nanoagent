@@ -14,34 +14,46 @@ sudo pacman -S llama-cpp
 
 其他平台：从 [llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases) 下载对应平台二进制，或源码编译。
 
-## 2. 启动模型服务
+## 2. 下载模型并启动服务
+
+### 2.1 下载 GGUF 权重
+
+官方仓库 `Qwen/Qwen3-Embedding-0.6B-GGUF` 只有两个文件，二选一：
+
+| 文件 | 大小 | 说明 |
+|---|---|---|
+| `Qwen3-Embedding-0.6B-Q8_0.gguf` | 610 MB | 推荐：质量损失极小，体积减半 |
+| `Qwen3-Embedding-0.6B-f16.gguf` | 1142 MB | 完整精度（spec 原定版本） |
+
+命令行下载到 `~/Downloads/`（支持断点续传；慢可把域名换成 `https://hf-mirror.com`）：
 
 ```bash
-llama-server -hf Qwen/Qwen3-Embedding-0.6B-GGUF:F16 \
+curl -L -C - -o ~/Downloads/Qwen3-Embedding-0.6B-Q8_0.gguf \
+  "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/main/Qwen3-Embedding-0.6B-Q8_0.gguf"
+```
+
+也可用浏览器打开仓库页面直接下载。embedding 模型的 GGUF 自包含 tokenizer，单文件即可，无需其他配套文件。
+
+### 2.2 基于下载的模型启动
+
+```bash
+llama-server -m ~/Downloads/Qwen3-Embedding-0.6B-Q8_0.gguf \
   --embeddings --port 8081 --alias qwen3-embedding
 ```
 
-- `-hf Qwen/Qwen3-Embedding-0.6B-GGUF:F16`：首次运行自动从 HuggingFace 下载 **F16 权重（1142 MB，1024 维嵌入）**，缓存在 `~/.cache/llama.cpp`，之后离线可用。该仓库只有两个文件：f16（1142 MB）与 Q8_0（610 MB）——`Q8_0` 是可选轻量替代（质量损失极小），与 spec 的 F16 决策二选一
-- 手动下载（离线环境）：从仓库下载 `Qwen3-Embedding-0.6B-f16.gguf` 后用 `-m` 加载：
-
-  ```bash
-  llama-server -m /path/to/Qwen3-Embedding-0.6B-f16.gguf \
-    --embeddings --port 8081 --alias qwen3-embedding
-  ```
-
-  embedding 模型的 GGUF 自包含 tokenizer，单文件即可，无需其他配套文件
-- 下载慢可走镜像：`HF_ENDPOINT=https://hf-mirror.com llama-server ...`
+- `-m`：加载本地 GGUF 文件（不联网）；换 f16 版本只需替换文件路径
 - `--embeddings`：只启用 embedding 模式（Qwen3-Embedding 使用 last-token pooling，llama.cpp 按 GGUF 元数据自动处理）
 - `--alias qwen3-embedding`：给模型稳定名字，供 `/v1/embeddings` 请求的 `model` 字段使用
 - 0.6B 嵌入模型 CPU 推理毫秒级响应，GPU 非必需；有 GPU 后端时可加 `-ngl 999` 全量卸载
+- 另有 `-hf Qwen/Qwen3-Embedding-0.6B-GGUF:F16` 自动下载模式，但主线按"先下载、后启动"操作，便于离线使用与版本固定
 
-**常驻运行**（可选）——`~/.config/systemd/user/nanoagent-embeddings.service`：
+**常驻运行**（可选）——`~/.config/systemd/user/nanoagent-embeddings.service`（`%h` 为用户主目录）：
 
 ```ini
 [Unit]
 Description=llama-server embeddings for nanoAgent (Qwen3-Embedding-0.6B)
 [Service]
-ExecStart=/usr/bin/llama-server -hf Qwen/Qwen3-Embedding-0.6B-GGUF:F16 --embeddings --port 8081 --alias qwen3-embedding
+ExecStart=/usr/bin/llama-server -m %h/Downloads/Qwen3-Embedding-0.6B-Q8_0.gguf --embeddings --port 8081 --alias qwen3-embedding
 Restart=on-failure
 [Install]
 WantedBy=default.target
@@ -83,11 +95,10 @@ OPENAI_EMBEDDINGS_API_KEY=local
 | 现象 | 处理 |
 |---|---|
 | 端口 8081 被占用 | 换端口启动，同步改 `OPENAI_EMBEDDINGS_BASE_URL` |
-| 模型下载慢 | `HF_ENDPOINT=https://hf-mirror.com` 前缀；或手动下载后用 `-m` 加载 |
-| `-hf` 提示找不到量化文件 | llama.cpp 对 `:F16` 标签做大小写不敏感匹配，应能命中 `f16` 文件；仍失败则手动下载 + `-m` 加载（保证可用） |
+| 模型下载慢/中断 | 换 `https://hf-mirror.com` 域名重下；`curl -C -` 支持断点续传 |
 | llama-server 停了 | `memory_search` 静默回退 bigram，agent 不中断 |
 | 中文检索效果 | Qwen3-Embedding 原生支持中文，无需分词配置 |
-| 想换更大模型 | 换 `-hf` 标签（如 4B），`OPENAI_EMBEDDINGS_MODEL` 同步改；冒烟校验自动重新把关 |
+| 想换更大模型 | 下载对应 GGUF 后改 `-m` 路径，`OPENAI_EMBEDDINGS_MODEL` 同步改；冒烟校验自动重新把关 |
 
 ## 6. 升级路径备忘（暂不做）
 
