@@ -59,7 +59,7 @@ func (e *EmbeddingScorer) Score(query string, entries []Entry) []Scored {
 		if cos <= 0.1 { // 无关条目不进结果
 			continue
 		}
-		out = append(out, Scored{Entry: en, Score: cos * (1 + en.Weight/10)})
+		out = append(out, Scored{Entry: en, Score: cos * weightBoost(en)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
 	return out

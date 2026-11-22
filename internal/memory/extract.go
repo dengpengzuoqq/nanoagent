@@ -68,7 +68,7 @@ const extractRules = `你是 nanoAgent 的记忆管理器。基于本次任务�
 规则：
 - 只记对未来任务有复用价值的信息：教训（失败/成功路径与原因）、事实（项目与环境的客观信息）、偏好（用户做法偏好）、约束（必须遵守的规则）
 - 不记：可从代码推导的架构/路径、git 历史、修 bug 配方、项目说明（nanoagents.md）已覆盖的内容、一次性临时状态
-- 粒度：一个事实一条，第三人称原子事实，禁止对话原文
+- 粒度：一个事实一条，第三人称原子事实，禁止对话原文；相关条目在 content 中用 [[id]] 互链
 - 更新优先于新增：语义重复的既有条目用 UPDATE（引用其 id），过时或错误条目用 DELETE
 - category 只允许 lesson/fact/preference/constraint；id 用 kebab-slug；weight 按重要度打 1-5
 - 输出严格 JSON：{"actions":[{"op":"ADD","id":"...","category":"lesson","content":"...","tags":["..."],"weight":3,"pinned":false,"source":"..."}]}；无动作时输出 {"actions":[]}

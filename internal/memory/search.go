@@ -18,7 +18,7 @@ type Scored struct {
 	Score float64
 }
 
-// BigramScorer 用字符 bigram 重合度（containment）× (1 + weight/10) 打分。
+// BigramScorer 用字符 bigram 重合度（containment）× 权重加权打分。
 // 零依赖、对中文按字成对切分，短事实条目场景够用。
 type BigramScorer struct{}
 
@@ -31,11 +31,14 @@ func (BigramScorer) Score(query string, entries []Entry) []Scored {
 		if overlap <= 0 {
 			continue
 		}
-		out = append(out, Scored{Entry: e, Score: overlap * (1 + e.Weight/10)})
+		out = append(out, Scored{Entry: e, Score: overlap * weightBoost(e)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
 	return out
 }
+
+// weightBoost 是两个打分器共享的权重加权因子。
+func weightBoost(e Entry) float64 { return 1 + e.Weight/10 }
 
 // bigrams 提取小写化后的相邻字符对（仅保留字母/数字/汉字，跳过空白与标点）。
 func bigrams(s string) map[string]struct{} {

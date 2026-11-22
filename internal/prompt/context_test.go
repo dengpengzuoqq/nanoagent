@@ -94,3 +94,14 @@ func TestBuildSystemPrompt(t *testing.T) {
 		last = i
 	}
 }
+
+// 注入字节稳定：同一 memory 状态下重复调用产出逐字节相同的 system prompt
+// （spec 验收要点——多轮请求前缀不破，KV 缓存命中成立）。
+func TestBuildSystemPromptByteStable(t *testing.T) {
+	rt := config.Load(t.TempDir())
+	first := BuildSystemPrompt(rt)
+	second := BuildSystemPrompt(rt)
+	if first != second {
+		t.Error("同一 memory 状态下两次 BuildSystemPrompt 输出应逐字节一致")
+	}
+}

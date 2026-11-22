@@ -18,7 +18,7 @@ Write a memory file when you learn durable information:
 - who is doing what, why, or by when in the project (type: fact)
 - rules that must be followed (type: constraint, consider pinned: true)
 
-Do NOT write: anything derivable from the code, git history, bug-fix recipes, content already covered by nanoagents.md, one-off task state. Convert relative dates to absolute. Check for an existing entry to UPDATE first; update or remove memories that turn out to be wrong. Organize semantically, not chronologically.`
+Do NOT write: anything derivable from the code, git history, bug-fix recipes, content already covered by nanoagents.md, one-off task state. Convert relative dates to absolute. Check for an existing entry to UPDATE first; update or remove memories that turn out to be wrong. Organize semantically, not chronologically. Link related entries with [[their-id]].`
 
 // SystemSection 组装 system prompt 的 "# Memory" 段：写入纪律 + 索引（限额内）+
 // 常驻条目正文（pinned > weight 降序，预算截断）。空记忆给占位语。

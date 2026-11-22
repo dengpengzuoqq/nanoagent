@@ -156,6 +156,27 @@ func TestDecay(t *testing.T) {
 	}
 }
 
+// Save 保留 Open 时解析失败的文件（模型写坏 frontmatter / 人工编辑出错不被静默清除）。
+func TestSaveKeepsBrokenFiles(t *testing.T) {
+	dir := t.TempDir()
+	brokenPath := filepath.Join(dir, "broken.md")
+	os.WriteFile(brokenPath, []byte("这不是合法的 frontmatter 内容\n"), 0o644)
+	s := Open(dir)
+	if len(s.broken) != 1 {
+		t.Fatalf("Open 应记录 broken 文件: %v", s.broken)
+	}
+	s.Entries = []Entry{sampleEntry("good")}
+	if err := s.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if _, err := os.Stat(brokenPath); err != nil {
+		t.Error("解析失败的文件应保留待人工修复，不应被 Save 清除")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "good.md")); err != nil {
+		t.Error("合法条目文件应正常写入")
+	}
+}
+
 // 旧格式时间线解析（迁移候选）。
 func TestLegacyTimeline(t *testing.T) {
 	legacy := "## 2026-11-20 15:04:05\n**Task:** 任务A\n**Result:** 结果A\n\n## 2026-11-21 10:00:00\n**Task:** 任务B\n**Result:** 结果B\n"

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"go-agent/internal/config"
 )
@@ -19,9 +20,11 @@ type Store struct {
 	Dir     string
 	Entries []Entry
 	Legacy  []string // 旧格式时间线条目原文（.nanoagents/memory.md），惰性迁移候选
+	broken  []string // Open 时解析失败的文件名：保留不删，人可直接修好
 }
 
-// Open 加载 dir 下全部条目文件（跳过 MEMORY.md；损坏文件跳过并告警），
+// Open 加载 dir 下全部条目文件（跳过 MEMORY.md；损坏文件记录为 broken，
+// Save 时保留不删——模型写坏 frontmatter 或人工编辑出错都不应被静默清除），
 // 并检测旧格式时间线文件（dir 上级的 memory.md）作为迁移候选。
 func Open(dir string) *Store {
 	s := &Store{Dir: dir}
@@ -39,7 +42,8 @@ func Open(dir string) *Store {
 		}
 		e, err := parseEntry(f.Name(), data)
 		if err != nil {
-			config.Logger.Warn("memory 条目解析失败，跳过", "file", f.Name(), "err", err)
+			config.Logger.Warn("memory 条目解析失败，保留文件待人工修复", "file", f.Name(), "err", err)
+			s.broken = append(s.broken, f.Name())
 			continue
 		}
 		s.Entries = append(s.Entries, e)
@@ -47,6 +51,14 @@ func Open(dir string) *Store {
 	sortEntries(s.Entries)
 	if data, err := os.ReadFile(filepath.Join(filepath.Dir(dir), legacyMemoryFile)); err == nil {
 		s.Legacy = parseLegacyTimeline(string(data))
+	}
+	return s
+}
+
+// truncateRunes 按 rune 截断（不会切碎多字节字符）。
+func truncateRunes(s string, limit int) string {
+	if r := []rune(s); len(r) > limit {
+		return string(r[:limit])
 	}
 	return s
 }
@@ -72,9 +84,9 @@ func sortEntries(entries []Entry) {
 	sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
 }
 
-// Size 返回全部条目序列化后的总字节数（目录容量检查）。
+// Size 返回条目序列化 + MEMORY.md 索引的总字节数（目录容量检查）。
 func (s *Store) Size() int {
-	total := 0
+	total := len(s.indexText())
 	for _, e := range s.Entries {
 		total += len(e.serialize())
 	}
@@ -191,14 +203,11 @@ func (s *Store) findByID(id string) *Entry {
 
 func firstLine(s string) string {
 	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
-	r := []rune(line)
-	if len(r) > IndexLineLimit {
-		line = string(r[:IndexLineLimit])
-	}
-	return line
+	return truncateRunes(line, IndexLineLimit)
 }
 
 // Save 持久化：写全部条目文件、删除已不存在条目的陈旧文件、重建 MEMORY.md 索引。
+// Open 时解析失败的文件（broken）保留不删。
 func (s *Store) Save() error {
 	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
 		return err
@@ -209,6 +218,9 @@ func (s *Store) Save() error {
 			return err
 		}
 		keep[e.ID+".md"] = true
+	}
+	for _, name := range s.broken {
+		keep[name] = true
 	}
 	files, err := os.ReadDir(s.Dir)
 	if err != nil {
@@ -224,19 +236,21 @@ func (s *Store) Save() error {
 	return s.writeIndex()
 }
 
-func (s *Store) writeIndex() error {
+// indexText 从条目集合构建索引内容（writeIndex 与 Size 共用）。
+func (s *Store) indexText() string {
 	var b strings.Builder
 	for _, e := range s.Entries {
-		line := fmt.Sprintf("- [%s](%s.md) — %s", e.ID, e.ID, e.Description)
-		if r := []rune(line); len(r) > IndexLineLimit {
-			line = string(r[:IndexLineLimit])
-		}
+		line := truncateRunes(fmt.Sprintf("- [%s](%s.md) — %s", e.ID, e.ID, e.Description), IndexLineLimit)
 		b.WriteString(line + "\n")
 	}
-	return os.WriteFile(filepath.Join(s.Dir, IndexFile), []byte(b.String()), 0o644)
+	return b.String()
 }
 
-// IndexSection 返回注入用索引文本（200 行 / 25KB 限额内）。
+func (s *Store) writeIndex() error {
+	return os.WriteFile(filepath.Join(s.Dir, IndexFile), []byte(s.indexText()), 0o644)
+}
+
+// IndexSection 返回注入用索引文本（200 行 / 25KB 限额内，UTF-8 安全截断）。
 func (s *Store) IndexSection() string {
 	data, err := os.ReadFile(filepath.Join(s.Dir, IndexFile))
 	if err != nil {
@@ -245,6 +259,9 @@ func (s *Store) IndexSection() string {
 	text := string(data)
 	if len(text) > IndexMaxBytes {
 		text = text[:IndexMaxBytes]
+		for len(text) > 0 && !utf8.ValidString(text) {
+			text = text[:len(text)-1] // 回退到完整 UTF-8 序列边界
+		}
 	}
 	lines := strings.Split(text, "\n")
 	if len(lines) > IndexMaxLines {
