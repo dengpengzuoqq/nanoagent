@@ -1,0 +1,7 @@
+## build bin
+agent
+## test files
+/.nanoagents/
+test.env
+nanoagents.md
+debug.log

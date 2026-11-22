@@ -1,0 +1,23 @@
+// Project-local debug tasks
+// 文档：https://zed.dev/docs/debugger
+//
+// cwd 固定 $ZED_WORKTREE_ROOT：程序按相对路径读取 ./test.env 与 ./.nanoagents/*
+// mode=exec + build 预编译到 ./agent：调试不在项目根目录产生 __debug_bin*
+[
+  {
+    "label": "Debug nanoAgent",
+    "adapter": "Delve",
+    "request": "launch",
+    "mode": "exec",
+    "build": { "command": "go", "args": ["build", "-o", "./agent", "./cmd/nanoagent"] },
+    // program 指向编译产物，mode=exec 要求可执行文件
+    "program": "./agent",
+    "args": [
+      "--max-iter", "20",
+      "--timeout", "30",
+      "--plan", "--auto-approve",
+      "统计当前文件的文件个数和字节大小，按每种文件类型进行分组"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+  },
+]
