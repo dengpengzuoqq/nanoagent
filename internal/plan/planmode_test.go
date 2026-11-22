@@ -19,8 +19,8 @@ func newTestState(autoApprove, tty bool, stdin string) *State {
 // TestPlanModeGuards：模式守卫。EnterPlan 重复进入报错；SubmitPlan 仅 plan 态可用；空计划报错。
 func TestPlanModeGuards(t *testing.T) {
 	ps := newTestState(false, true, "y\n")
-	if got := ps.SubmitPlan("any plan"); !strings.HasPrefix(got, "Error: submit_plan can only be used in plan mode") {
-		t.Errorf("非 plan 态 SubmitPlan = %q", got)
+	if d := ps.SubmitPlan("any plan"); d.Kind != DecisionError || !strings.HasPrefix(d.Result, "Error: submit_plan can only be used in plan mode") {
+		t.Errorf("非 plan 态 SubmitPlan = %+v", d)
 	}
 	if got := ps.EnterPlan(); !strings.Contains(got, "You are in Plan mode") {
 		t.Errorf("首次 EnterPlan = %q", got)
@@ -28,8 +28,8 @@ func TestPlanModeGuards(t *testing.T) {
 	if got := ps.EnterPlan(); got != "Error: already in plan mode" {
 		t.Errorf("重复 EnterPlan = %q", got)
 	}
-	if got := ps.SubmitPlan("  \n "); got != "Error: plan cannot be empty" {
-		t.Errorf("空计划 SubmitPlan = %q", got)
+	if d := ps.SubmitPlan("  \n "); d.Result != "Error: plan cannot be empty" {
+		t.Errorf("空计划 SubmitPlan = %+v", d)
 	}
 }
 
@@ -39,12 +39,12 @@ func TestPlanModeApproval(t *testing.T) {
 	// TTY + y → 批准，模式退出
 	ps := newTestState(false, true, "y\n")
 	ps.Active = true
-	got := ps.SubmitPlan("step 1\nstep 2")
+	d := ps.SubmitPlan("step 1\nstep 2")
 	if ps.Active {
 		t.Error("批准后应退出 plan 态")
 	}
-	if !strings.Contains(got, "NO LONGER in Plan mode") {
-		t.Errorf("批准结果缺少 leave reminder: %q", got)
+	if d.Kind != DecisionApprove || !strings.Contains(d.Result, "NO LONGER in Plan mode") {
+		t.Errorf("批准结果异常: %+v", d)
 	}
 	// 计划全文应已打印给用户
 	out := ps.Stdout.(*bytes.Buffer).String()
@@ -55,57 +55,57 @@ func TestPlanModeApproval(t *testing.T) {
 	// TTY + n 带反馈 → 拒绝，留在 plan 态，反馈回传
 	ps = newTestState(false, true, "n focus on tests first\n")
 	ps.Active = true
-	got = ps.SubmitPlan("step 1")
+	d = ps.SubmitPlan("step 1")
 	if !ps.Active {
 		t.Error("拒绝后应留在 plan 态")
 	}
-	if !strings.Contains(got, "focus on tests first") || !strings.Contains(got, "in Plan mode") {
-		t.Errorf("拒绝结果缺少反馈与 plan reminder: %q", got)
+	if d.Kind != DecisionReject || !strings.Contains(d.Result, "focus on tests first") || !strings.Contains(d.Result, "in Plan mode") {
+		t.Errorf("拒绝结果缺少反馈与 plan reminder: %+v", d)
 	}
 
 	// 裸 n → 通用反馈
 	ps = newTestState(false, true, "n\n")
 	ps.Active = true
-	got = ps.SubmitPlan("step 1")
-	if !ps.Active || !strings.Contains(got, "revise") {
-		t.Errorf("裸 n 拒绝处理异常: Active=%v got=%q", ps.Active, got)
+	d = ps.SubmitPlan("step 1")
+	if !ps.Active || d.Kind != DecisionReject || !strings.Contains(d.Result, "revise") {
+		t.Errorf("裸 n 拒绝处理异常: Active=%v d=%+v", ps.Active, d)
 	}
 
 	// "no" / "Nope, ..."：整句原样反馈（不能被当成 n 前缀吃掉首字母）
 	for _, input := range []string{"no\n", "Nope, add tests first\n"} {
 		ps = newTestState(false, true, input)
 		ps.Active = true
-		got = ps.SubmitPlan("step 1")
-		if want := strings.TrimSpace(input); !ps.Active || !strings.Contains(got, want) {
-			t.Errorf("输入 %q 反馈回传异常: Active=%v got=%q", want, ps.Active, got)
+		d = ps.SubmitPlan("step 1")
+		if want := strings.TrimSpace(input); !ps.Active || !strings.Contains(d.Result, want) {
+			t.Errorf("输入 %q 反馈回传异常: Active=%v got=%q", want, ps.Active, d.Result)
 		}
 	}
 
 	// --auto-approve → 直接通过
 	ps = newTestState(true, false, "")
 	ps.Active = true
-	got = ps.SubmitPlan("step 1")
+	d = ps.SubmitPlan("step 1")
 	if ps.Active {
 		t.Error("auto-approve 后应退出 plan 态")
 	}
-	if !strings.Contains(got, "NO LONGER in Plan mode") {
-		t.Errorf("auto-approve 结果异常: %q", got)
+	if d.Kind != DecisionApprove || !strings.Contains(d.Result, "NO LONGER in Plan mode") {
+		t.Errorf("auto-approve 结果异常: %+v", d)
 	}
 }
 
 // TestPlanModeNonTTYFailClosed：非 TTY 且未传 --auto-approve 时 fail-closed，
-// 置 FatalErr 终止运行，不进入批准循环。
+// 返回 DecisionFatal 终止运行，不进入批准循环。
 func TestPlanModeNonTTYFailClosed(t *testing.T) {
 	ps := newTestState(false, false, "")
 	ps.Active = true
-	got := ps.SubmitPlan("step 1")
-	if !strings.HasPrefix(got, "Error: plan approval requires an interactive terminal") {
-		t.Errorf("非 TTY 提交 = %q", got)
+	d := ps.SubmitPlan("step 1")
+	if d.Kind != DecisionFatal {
+		t.Errorf("非 TTY 提交应返回 DecisionFatal: %+v", d)
 	}
-	if ps.FatalErr == "" {
-		t.Error("非 TTY 未传 --auto-approve 应置 FatalErr 使运行终止")
+	if !strings.HasPrefix(d.Fatal, "Error: plan approval requires an interactive terminal") {
+		t.Errorf("Fatal 信息异常: %q", d.Fatal)
 	}
-	if !strings.Contains(ps.FatalErr, "--auto-approve") {
-		t.Errorf("FatalErr 应提示 --auto-approve: %q", ps.FatalErr)
+	if !strings.Contains(d.Fatal, "--auto-approve") {
+		t.Errorf("Fatal 应提示 --auto-approve: %q", d.Fatal)
 	}
 }

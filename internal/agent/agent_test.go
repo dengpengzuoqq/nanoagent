@@ -33,20 +33,20 @@ func newTestPlanState(autoApprove, tty bool, stdin string) *plan.State {
 // plan 态只读边界由 TestPlanModeRestrictions 覆盖）。
 func TestDispatchTool(t *testing.T) {
 	ps := newTestPlanState(false, true, "")
-	if got := dispatchTool("no_such_tool", `{}`, nil, time.Second, ps); got != "Error: Unknown tool 'no_such_tool'" {
+	if got, _ := dispatchTool("no_such_tool", `{}`, nil, time.Second, ps); got != "Error: Unknown tool 'no_such_tool'" {
 		t.Errorf("未知工具 = %q", got)
 	}
-	if got := dispatchTool("bash", `{"command":"echo routed"}`, nil, 10*time.Second, ps); got != "routed\n" {
+	if got, _ := dispatchTool("bash", `{"command":"echo routed"}`, nil, 10*time.Second, ps); got != "routed\n" {
 		t.Errorf("bash 路由 = %q", got)
 	}
-	if got := dispatchTool("write", `{"path":"`+t.TempDir()+`/d.txt","content":"x"}`, nil, time.Second, ps); !strings.HasPrefix(got, "Successfully wrote") {
+	if got, _ := dispatchTool("write", `{"path":"`+t.TempDir()+`/d.txt","content":"x"}`, nil, time.Second, ps); !strings.HasPrefix(got, "Successfully wrote") {
 		t.Errorf("write 路由 = %q", got)
 	}
-	if got := dispatchTool("bash", `{bad json`, nil, time.Second, ps); !strings.HasPrefix(got, "Error: invalid tool arguments") {
+	if got, _ := dispatchTool("bash", `{bad json`, nil, time.Second, ps); !strings.HasPrefix(got, "Error: invalid tool arguments") {
 		t.Errorf("坏参数 = %q", got)
 	}
 	// enter_plan 经 dispatch 进入计划态
-	if got := dispatchTool("enter_plan", `{}`, nil, time.Second, ps); !strings.Contains(got, "You are in Plan mode") {
+	if got, _ := dispatchTool("enter_plan", `{}`, nil, time.Second, ps); !strings.Contains(got, "You are in Plan mode") {
 		t.Errorf("dispatch enter_plan = %q", got)
 	}
 	if !ps.Active {
@@ -67,18 +67,18 @@ func TestPlanModeRestrictions(t *testing.T) {
 		{"srv__t", `{}`},
 	}
 	for _, tc := range blocked {
-		got := dispatchTool(tc.name, tc.args, registry, 0, ps)
+		got, _ := dispatchTool(tc.name, tc.args, registry, 0, ps)
 		if !strings.HasPrefix(got, "Error: ") || !strings.Contains(got, "plan mode") || !strings.Contains(got, "submit_plan") {
 			t.Errorf("plan 态调用 %s 应被拦截并指明出路，实际: %q", tc.name, got)
 		}
 	}
-	if got := dispatchTool("read", `{"path":"agent.go","limit":1}`, registry, 10*time.Second, ps); strings.HasPrefix(got, "Error:") {
+	if got, _ := dispatchTool("read", `{"path":"agent.go","limit":1}`, registry, 10*time.Second, ps); strings.HasPrefix(got, "Error:") {
 		t.Errorf("plan 态 read 不应被拦截: %q", got)
 	}
-	if got := dispatchTool("glob", `{"pattern":"*.go"}`, registry, 10*time.Second, ps); strings.HasPrefix(got, "Error:") {
+	if got, _ := dispatchTool("glob", `{"pattern":"*.go"}`, registry, 10*time.Second, ps); strings.HasPrefix(got, "Error:") {
 		t.Errorf("plan 态 glob 不应被拦截: %q", got)
 	}
-	if got := dispatchTool("grep", `{"pattern":"package","path":"."}`, registry, 10*time.Second, ps); strings.HasPrefix(got, "Error:") {
+	if got, _ := dispatchTool("grep", `{"pattern":"package","path":"."}`, registry, 10*time.Second, ps); strings.HasPrefix(got, "Error:") {
 		t.Errorf("plan 态 grep 不应被拦截: %q", got)
 	}
 }
@@ -132,6 +132,8 @@ func fakeResponsesServer(t *testing.T, responses []string) (*bodyCollector, open
 const respFunctionCall = `{"id":"resp_1","object":"response","created_at":1,"status":"completed","model":"m","output":[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"bash","arguments":"{\"command\":\"echo hi\"}","status":"completed"}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
 
 const respFinalText = `{"id":"resp_2","object":"response","created_at":1,"status":"completed","model":"m","output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"all done","annotations":[]}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+
+const respSubmitPlan = `{"id":"resp_sp","object":"response","created_at":1,"status":"completed","model":"m","output":[{"type":"function_call","id":"fc_sp","call_id":"call_sp","name":"submit_plan","arguments":"{\"plan\":\"step 1\"}","status":"completed"}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
 
 // TestRunLoop：首轮 function_call 触发工具执行，次轮纯文本结束。验证 instructions 仅首轮发送、
 // 次轮带 previous_response_id 指向上一轮 id，进度与工具结果经注入的 Out/Err 输出。
@@ -192,5 +194,28 @@ func TestRunMaxIterations(t *testing.T) {
 	}
 	if n := collector.count(); n != 2 {
 		t.Errorf("请求次数 = %d, want 2（等于 max-iter）", n)
+	}
+}
+
+// TestRunPlanFailClosed：非 TTY（go test 的 stdin）且未传 --auto-approve 时提交计划，
+// Run 应立即终止并返回 Fatal 信息，不发起第二轮请求。
+func TestRunPlanFailClosed(t *testing.T) {
+	rt := config.Load(t.TempDir())
+	collector, client := fakeResponsesServer(t, []string{respSubmitPlan})
+	rt.Client = client
+
+	got := Run("plan it", Options{
+		Runtime: rt,
+		MaxIter: 3,
+		Timeout: 10 * time.Second,
+		Plan:    &plan.State{Active: true, Stdin: strings.NewReader(""), Stdout: &bytes.Buffer{}}, // TTY=false：确定性 fail-closed
+		Out:     &bytes.Buffer{},
+		Err:     &bytes.Buffer{},
+	})
+	if !strings.HasPrefix(got, "Error: plan approval requires an interactive terminal") {
+		t.Errorf("Run fail-closed = %q", got)
+	}
+	if n := collector.count(); n != 1 {
+		t.Errorf("请求次数 = %d, want 1（终止后不再请求）", n)
 	}
 }

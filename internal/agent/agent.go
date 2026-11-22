@@ -21,12 +21,13 @@ import (
 	"go-agent/internal/tools"
 )
 
-// dispatchTool 按名称分发工具调用（本地工具 + plan 模式工具 + MCP 注册工具）；
-// 任何错误都以字符串返回，保证 agent loop 继续。ps 承载计划模式的状态与守卫。
-func dispatchTool(name, argsJSON string, mcpRegistry map[string]mcp.Tool, timeout time.Duration, ps *plan.State) string {
+// dispatchTool 按名称分发工具调用（本地工具 + plan 模式工具 + MCP 注册工具）。
+// 返回 (tool result, fatal)：fatal 非空表示计划模式 fail-closed，调用方终止整个运行；
+// 其余任何错误都以字符串返回，保证 agent loop 继续。
+func dispatchTool(name, argsJSON string, mcpRegistry map[string]mcp.Tool, timeout time.Duration, ps *plan.State) (string, string) {
 	var args map[string]any
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return fmt.Sprintf("Error: invalid tool arguments: %v", err)
+		return fmt.Sprintf("Error: invalid tool arguments: %v", err), ""
 	}
 	str := func(key string) string { s, _ := args[key].(string); return s }
 	intArg := func(key string) int { n, _ := args[key].(float64); return int(n) }
@@ -34,39 +35,40 @@ func dispatchTool(name, argsJSON string, mcpRegistry map[string]mcp.Tool, timeou
 	// 计划模式工具（模式守卫在 plan.State 内）
 	switch name {
 	case "enter_plan":
-		return ps.EnterPlan()
+		return ps.EnterPlan(), ""
 	case "submit_plan":
-		return ps.SubmitPlan(str("plan"))
+		d := ps.SubmitPlan(str("plan"))
+		return d.Result, d.Fatal
 	}
 	// plan 态只读边界：硬禁 write/edit/bash/MCP；read/glob/grep 放行
 	isMCPTool := func(n string) bool { _, ok := mcpRegistry[n]; return ok }
 	if msg, blocked := ps.PlanGuard(name, isMCPTool); blocked {
-		return msg
+		return msg, ""
 	}
 
 	switch name {
 	case "bash":
-		return tools.Bash(str("command"), timeout)
+		return tools.Bash(str("command"), timeout), ""
 	case "read":
-		return tools.Read(str("path"), intArg("offset"), intArg("limit"))
+		return tools.Read(str("path"), intArg("offset"), intArg("limit")), ""
 	case "write":
-		return tools.Write(str("path"), str("content"))
+		return tools.Write(str("path"), str("content")), ""
 	case "edit":
-		return tools.Edit(str("path"), str("old_string"), str("new_string"))
+		return tools.Edit(str("path"), str("old_string"), str("new_string")), ""
 	case "glob":
-		return tools.Glob(str("pattern"))
+		return tools.Glob(str("pattern")), ""
 	case "grep":
 		path := str("path")
 		if path == "" {
 			path = "."
 		}
-		return tools.Grep(str("pattern"), path, timeout)
+		return tools.Grep(str("pattern"), path, timeout), ""
 	default:
 		if t, ok := mcpRegistry[name]; ok {
 			// MCP 工具参数原样透传（复用上方已解析的 args）
-			return t.Server.CallTool(t.Name, args, timeout)
+			return t.Server.CallTool(t.Name, args, timeout), ""
 		}
-		return fmt.Sprintf("Error: Unknown tool '%s'", name)
+		return fmt.Sprintf("Error: Unknown tool '%s'", name), ""
 	}
 }
 
@@ -161,10 +163,10 @@ loop:
 		for _, call := range toolCalls {
 			fmt.Fprintf(out, "[Tool-%s] %s(%s)\n", call.CallID, call.Name, call.Arguments)
 			config.Logger.Debug("执行工具", "name", call.Name, "call_id", call.CallID)
-			result := dispatchTool(call.Name, call.Arguments, mcpRegistry, timeout, ps)
-			// 非 TTY 未传 --auto-approve：fail-closed，立即终止整个运行
-			if ps.FatalErr != "" {
-				finalText = ps.FatalErr
+			result, fatal := dispatchTool(call.Name, call.Arguments, mcpRegistry, timeout, ps)
+			// 非 TTY 未传 --auto-approve 等场景：fail-closed，立即终止整个运行
+			if fatal != "" {
+				finalText = fatal
 				reachedLimit = false
 				break loop
 			}
