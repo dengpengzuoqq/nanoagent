@@ -4,66 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/option"
-
 	"go-agent/internal/config"
 	"go-agent/internal/plan"
+	"go-agent/internal/testutil"
 )
-
-// bodyCollector 线程安全地收集请求体：handler goroutine 写、测试 goroutine 读，必须互斥。
-type bodyCollector struct {
-	mu     sync.Mutex
-	bodies []map[string]any
-}
-
-func (c *bodyCollector) add(body map[string]any) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.bodies = append(c.bodies, body)
-}
-
-func (c *bodyCollector) count() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return len(c.bodies)
-}
-
-func (c *bodyCollector) at(i int) map[string]any {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.bodies[i]
-}
-
-// fakeResponsesServer 启动假 Responses API：前 len(responses)-1 轮返回 responses[i]，
-// 之后重复返回最后一个；收集每个请求体，返回 (收集器, 指向该服务的测试客户端)。
-func fakeResponsesServer(t *testing.T, responses []string) (*bodyCollector, openai.Client) {
-	t.Helper()
-	c := &bodyCollector{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Errorf("请求体不是 JSON: %v", err)
-		}
-		c.add(body)
-		w.Header().Set("Content-Type", "application/json")
-		i := c.count() - 1
-		if i >= len(responses) {
-			i = len(responses) - 1
-		}
-		io.WriteString(w, responses[i])
-	}))
-	t.Cleanup(srv.Close)
-	return c, openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(srv.URL))
-}
 
 const respFunctionCall = `{"id":"resp_1","object":"response","created_at":1,"status":"completed","model":"m","output":[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"bash","arguments":"{\"command\":\"echo hi\"}","status":"completed"}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
 
@@ -76,7 +24,7 @@ const respSubmitPlan = `{"id":"resp_sp","object":"response","created_at":1,"stat
 // memory 写入是 main 的职责（AppendMemory 另有单测），Run 只返回最终回答。
 func TestRunLoop(t *testing.T) {
 	rt := config.Load(t.TempDir())
-	collector, client := fakeResponsesServer(t, []string{respFunctionCall, respFinalText})
+	collector, client := testutil.ResponsesServer(t, []string{respFunctionCall, respFinalText})
 	rt.Client = client // Runtime 的 client 可整体替换：这就是 config seam 的第二个 adapter
 	out, errW := &bytes.Buffer{}, &bytes.Buffer{}
 
@@ -91,16 +39,16 @@ func TestRunLoop(t *testing.T) {
 	if got != "all done" {
 		t.Errorf("Run 最终回答 = %q, want %q", got, "all done")
 	}
-	if n := collector.count(); n != 2 {
+	if n := collector.Count(); n != 2 {
 		t.Fatalf("请求次数 = %d, want 2", n)
 	}
-	if _, ok := collector.at(0)["instructions"].(string); !ok {
-		t.Errorf("首轮应携带 instructions，实际: %v", collector.at(0))
+	if _, ok := collector.At(0)["instructions"].(string); !ok {
+		t.Errorf("首轮应携带 instructions，实际: %v", collector.At(0))
 	}
-	if _, ok := collector.at(1)["instructions"]; ok {
-		t.Errorf("次轮不应重复发送 instructions: %v", collector.at(1))
+	if _, ok := collector.At(1)["instructions"]; ok {
+		t.Errorf("次轮不应重复发送 instructions: %v", collector.At(1))
 	}
-	if got, _ := collector.at(1)["previous_response_id"].(string); got != "resp_1" {
+	if got, _ := collector.At(1)["previous_response_id"].(string); got != "resp_1" {
 		t.Errorf("次轮 previous_response_id = %q, want resp_1", got)
 	}
 	if !strings.Contains(out.String(), `[Tool-call_1] bash(`) {
@@ -114,7 +62,7 @@ func TestRunLoop(t *testing.T) {
 // TestRunMaxIterations：模型一直请求工具时，达到 MaxIter 即返回 "Max iterations reached"。
 func TestRunMaxIterations(t *testing.T) {
 	rt := config.Load(t.TempDir())
-	collector, client := fakeResponsesServer(t, []string{respFunctionCall})
+	collector, client := testutil.ResponsesServer(t, []string{respFunctionCall})
 	rt.Client = client
 
 	got := Run("loop", Options{
@@ -128,7 +76,7 @@ func TestRunMaxIterations(t *testing.T) {
 	if got != "Max iterations reached" {
 		t.Errorf("Run 超限回答 = %q, want %q", got, "Max iterations reached")
 	}
-	if n := collector.count(); n != 2 {
+	if n := collector.Count(); n != 2 {
 		t.Errorf("请求次数 = %d, want 2（等于 max-iter）", n)
 	}
 }
@@ -137,7 +85,7 @@ func TestRunMaxIterations(t *testing.T) {
 // Run 应立即终止并返回 Fatal 信息，不发起第二轮请求。
 func TestRunPlanFailClosed(t *testing.T) {
 	rt := config.Load(t.TempDir())
-	collector, client := fakeResponsesServer(t, []string{respSubmitPlan})
+	collector, client := testutil.ResponsesServer(t, []string{respSubmitPlan})
 	rt.Client = client
 
 	got := Run("plan it", Options{
@@ -151,7 +99,7 @@ func TestRunPlanFailClosed(t *testing.T) {
 	if !strings.HasPrefix(got, "Error: plan approval requires an interactive terminal") {
 		t.Errorf("Run fail-closed = %q", got)
 	}
-	if n := collector.count(); n != 1 {
+	if n := collector.Count(); n != 1 {
 		t.Errorf("请求次数 = %d, want 1（终止后不再请求）", n)
 	}
 }
@@ -186,7 +134,7 @@ func TestRunToolRouting(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			rt := config.Load(t.TempDir())
-			collector, client := fakeResponsesServer(t, []string{tc.resp, respFinalText})
+			collector, client := testutil.ResponsesServer(t, []string{tc.resp, respFinalText})
 			rt.Client = client
 			got := Run("task", Options{
 				Runtime: rt,
@@ -199,10 +147,10 @@ func TestRunToolRouting(t *testing.T) {
 			if got != "all done" {
 				t.Fatalf("Run = %q, want %q", got, "all done")
 			}
-			if n := collector.count(); n != 2 {
+			if n := collector.Count(); n != 2 {
 				t.Fatalf("请求次数 = %d, want 2", n)
 			}
-			input, _ := json.Marshal(collector.at(1)["input"])
+			input, _ := json.Marshal(collector.At(1)["input"])
 			if !strings.Contains(string(input), tc.wantIn) {
 				t.Errorf("第二轮回填缺少 %q，实际: %s", tc.wantIn, input)
 			}

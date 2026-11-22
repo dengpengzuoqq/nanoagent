@@ -32,16 +32,16 @@ const (
 
 // Entry 是一条跨任务记忆：一个事实一个文件，ID 即文件名（kebab-slug）。
 type Entry struct {
-	ID           string // kebab-slug，frontmatter 的 name
-	Description  string // 一行摘要，检索相关性判断用
-	Category     string // lesson | fact | preference | constraint
-	Content      string // 正文；lesson/constraint 含 Why:/How to apply:
-	Tags         []string
-	Weight       float64
-	Pinned       bool
-	CreatedAt    time.Time
-	LastAccessed time.Time
-	Source       string
+	ID           string    `json:"id"`          // kebab-slug，frontmatter 的 name
+	Description  string    `json:"description"` // 一行摘要，检索相关性判断用
+	Category     string    `json:"category"`    // lesson | fact | preference | constraint
+	Content      string    `json:"content"`     // 正文；lesson/constraint 含 Why:/How to apply:
+	Tags         []string  `json:"tags"`
+	Weight       float64   `json:"weight"`
+	Pinned       bool      `json:"pinned"`
+	CreatedAt    time.Time `json:"created_at"`
+	LastAccessed time.Time `json:"last_accessed"`
+	Source       string    `json:"source"`
 }
 
 func validCategory(c string) bool {
