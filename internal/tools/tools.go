@@ -20,6 +20,17 @@ import (
 	"go-agent/internal/config"
 )
 
+// Tool 是工具 registry 的 interface 单元：名称、schema、只读能力与执行体绑在一处。
+// 三种 adapter：LocalTools（本地）、plan.PlanTools（计划模式）、mcp.Tool 包装（MCP server）。
+// Execute 的错误由调用方统一编码为 "Error: ..." 回给模型。
+type Tool struct {
+	Name        string
+	Description string
+	Schema      map[string]any
+	ReadOnly    bool // plan 态只放行 ReadOnly 工具
+	Execute     func(args map[string]any, timeout time.Duration) (string, error)
+}
+
 // FunctionTool 构造 Responses API 的扁平结构工具定义
 func FunctionTool(name, description string, parameters map[string]any) responses.ToolUnionParam {
 	return responses.ToolUnionParam{
@@ -31,59 +42,99 @@ func FunctionTool(name, description string, parameters map[string]any) responses
 	}
 }
 
+// strArg / intArg 从工具参数 map 取值（缺失返回零值）。
+func strArg(args map[string]any, key string) string { s, _ := args[key].(string); return s }
+func intArg(args map[string]any, key string) int    { n, _ := args[key].(float64); return int(n) }
+
 // LocalTools 是本地执行工具集。
-var LocalTools = []responses.ToolUnionParam{
-	FunctionTool("bash", "Run shell command", map[string]any{
-		"type":       "object",
-		"properties": map[string]any{"command": map[string]any{"type": "string"}},
-		"required":   []string{"command"},
-	}),
-	FunctionTool("read", "Read file with line numbers", map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"path":   map[string]any{"type": "string"},
-			"offset": map[string]any{"type": "integer"},
-			"limit":  map[string]any{"type": "integer"},
+var LocalTools = []Tool{
+	{
+		Name: "bash", Description: "Run shell command", ReadOnly: false,
+		Schema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"command": map[string]any{"type": "string"}},
+			"required":   []string{"command"},
 		},
-		"required": []string{"path"},
-	}),
-	FunctionTool("write", "Write content to file", map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"path":    map[string]any{"type": "string"},
-			"content": map[string]any{"type": "string"},
+		Execute: func(args map[string]any, timeout time.Duration) (string, error) {
+			return Bash(strArg(args, "command"), timeout)
 		},
-		"required": []string{"path", "content"},
-	}),
-	FunctionTool("edit", "Replace string in file", map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"path":       map[string]any{"type": "string"},
-			"old_string": map[string]any{"type": "string"},
-			"new_string": map[string]any{"type": "string"},
+	},
+	{
+		Name: "read", Description: "Read file with line numbers", ReadOnly: true,
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path":   map[string]any{"type": "string"},
+				"offset": map[string]any{"type": "integer"},
+				"limit":  map[string]any{"type": "integer"},
+			},
+			"required": []string{"path"},
 		},
-		"required": []string{"path", "old_string", "new_string"},
-	}),
-	FunctionTool("glob", "Find files by pattern", map[string]any{
-		"type":       "object",
-		"properties": map[string]any{"pattern": map[string]any{"type": "string"}},
-		"required":   []string{"pattern"},
-	}),
-	FunctionTool("grep", "Search files for pattern", map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"pattern": map[string]any{"type": "string"},
-			"path":    map[string]any{"type": "string"},
+		Execute: func(args map[string]any, timeout time.Duration) (string, error) {
+			return Read(strArg(args, "path"), intArg(args, "offset"), intArg(args, "limit"))
 		},
-		"required": []string{"pattern"},
-	}),
+	},
+	{
+		Name: "write", Description: "Write content to file", ReadOnly: false,
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path":    map[string]any{"type": "string"},
+				"content": map[string]any{"type": "string"},
+			},
+			"required": []string{"path", "content"},
+		},
+		Execute: func(args map[string]any, timeout time.Duration) (string, error) {
+			return Write(strArg(args, "path"), strArg(args, "content"))
+		},
+	},
+	{
+		Name: "edit", Description: "Replace string in file", ReadOnly: false,
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path":       map[string]any{"type": "string"},
+				"old_string": map[string]any{"type": "string"},
+				"new_string": map[string]any{"type": "string"},
+			},
+			"required": []string{"path", "old_string", "new_string"},
+		},
+		Execute: func(args map[string]any, timeout time.Duration) (string, error) {
+			return Edit(strArg(args, "path"), strArg(args, "old_string"), strArg(args, "new_string"))
+		},
+	},
+	{
+		Name: "glob", Description: "Find files by pattern", ReadOnly: true,
+		Schema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"pattern": map[string]any{"type": "string"}},
+			"required":   []string{"pattern"},
+		},
+		Execute: func(args map[string]any, timeout time.Duration) (string, error) {
+			return Glob(strArg(args, "pattern"))
+		},
+	},
+	{
+		Name: "grep", Description: "Search files for pattern", ReadOnly: true,
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"pattern": map[string]any{"type": "string"},
+				"path":    map[string]any{"type": "string"},
+			},
+			"required": []string{"pattern"},
+		},
+		Execute: func(args map[string]any, timeout time.Duration) (string, error) {
+			return Grep(strArg(args, "pattern"), strArg(args, "path"), timeout)
+		},
+	},
 }
 
 // Read 读取文件并加 "%4d " 行号；offset 0 起始，limit 为行数，0 表示不限制。
-func Read(path string, offset, limit int) string {
+func Read(path string, offset, limit int) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Sprintf("Error: %v", err)
+		return "", err
 	}
 	lines := strings.SplitAfter(string(data), "\n")
 	// SplitAfter 在文件以 \n 结尾时多出一个尾部空元素，去掉
@@ -95,7 +146,7 @@ func Read(path string, offset, limit int) string {
 		start = 0
 	}
 	if start > len(lines) {
-		return ""
+		return "", nil
 	}
 	end := len(lines)
 	if limit > 0 && start+limit < end {
@@ -105,27 +156,27 @@ func Read(path string, offset, limit int) string {
 	for i := start; i < end; i++ {
 		fmt.Fprintf(&b, "%4d %s", i+1, lines[i])
 	}
-	return b.String()
+	return b.String(), nil
 }
 
 // Edit 用 new_string 替换 old_string；old_string 必须恰好出现一次，否则报错且不改文件。
-func Edit(path, oldString, newString string) string {
+func Edit(path, oldString, newString string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Sprintf("Error: %v", err)
+		return "", err
 	}
 	content := string(data)
 	if strings.Count(content, oldString) != 1 {
-		return "Error: old_string must appear exactly once"
+		return "", errors.New("old_string must appear exactly once")
 	}
 	if err := os.WriteFile(path, []byte(strings.Replace(content, oldString, newString, 1)), 0o644); err != nil {
-		return fmt.Sprintf("Error: %v", err)
+		return "", err
 	}
-	return "Successfully edited " + path
+	return "Successfully edited " + path, nil
 }
 
-// Glob 按 pattern 找文件，mtime 降序；支持 ** 递归；无匹配返回提示。
-func Glob(pattern string) string {
+// Glob 按 pattern 找文件，mtime 降序；支持 ** 递归；无匹配返回提示（正常结果，非错误）。
+func Glob(pattern string) (string, error) {
 	var matches []string
 	if strings.Contains(pattern, "**") {
 		matches = globRecursive(pattern)
@@ -133,7 +184,7 @@ func Glob(pattern string) string {
 		matches, _ = filepath.Glob(pattern)
 	}
 	if len(matches) == 0 {
-		return "No files found"
+		return "No files found", nil
 	}
 	// mtime 降序
 	type mtimeItem struct {
@@ -153,7 +204,7 @@ func Glob(pattern string) string {
 	for i, it := range items {
 		paths[i] = it.path
 	}
-	return strings.Join(paths, "\n")
+	return strings.Join(paths, "\n"), nil
 }
 
 // globRecursive 实现 Python glob(recursive=True) 的 ** 语义：** 匹配零层或多层目录。
@@ -226,16 +277,16 @@ func collectAll(dir string, results *[]string) {
 }
 
 // Write 写文件，成功返回确认信息。
-func Write(path, content string) string {
+func Write(path, content string) (string, error) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		return fmt.Sprintf("Error: %v", err)
+		return "", err
 	}
-	return "Successfully wrote to " + path
+	return "Successfully wrote to " + path, nil
 }
 
 // Bash 执行 bash 命令，stdout 与 stderr 顺序拼接，
-// 超时返回 Error 字符串；非零退出码不算错误。
-func Bash(command string, timeout time.Duration) string {
+// 超时与启动失败返回 error；非零退出码不算错误。
+func Bash(command string, timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "bash", "-c", command)
@@ -247,30 +298,34 @@ func Bash(command string, timeout time.Duration) string {
 	cmd.Stderr = &errb
 	err := cmd.Run()
 	if ctx.Err() != nil {
-		return fmt.Sprintf("Error: command timed out after %s: %v", timeout, command)
+		return "", fmt.Errorf("command timed out after %s: %v", timeout, command)
 	}
 	// ErrWaitDelay：命令已结束但子进程还占着管道，已读到的输出照常返回
 	if err != nil && !errors.Is(err, exec.ErrWaitDelay) {
 		if _, ok := err.(*exec.ExitError); !ok {
-			return fmt.Sprintf("Error: %v", err)
+			return "", err
 		}
 	}
 	config.Logger.Debug("execute_bash", "output_len", out.Len()+errb.Len())
-	return out.String() + errb.String()
+	return out.String() + errb.String(), nil
 }
 
-// Grep 调用系统 grep -r（参数数组传参，不走 shell，无注入面）；只回 stdout，无匹配返回提示。
-func Grep(pattern, path string, timeout time.Duration) string {
+// Grep 调用系统 grep -r（参数数组传参，不走 shell，无注入面）；path 为空时默认当前目录；
+// 只回 stdout，无匹配返回提示。
+func Grep(pattern, path string, timeout time.Duration) (string, error) {
+	if path == "" {
+		path = "."
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "grep", "-r", "--", pattern, path)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil && ctx.Err() != nil {
-		return fmt.Sprintf("Error: grep timed out after %s", timeout)
+		return "", fmt.Errorf("grep timed out after %s", timeout)
 	}
 	if out.Len() == 0 {
-		return "No matches found"
+		return "No matches found", nil
 	}
-	return out.String()
+	return out.String(), nil
 }

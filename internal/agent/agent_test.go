@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,73 +16,8 @@ import (
 	"github.com/openai/openai-go/v3/option"
 
 	"go-agent/internal/config"
-	"go-agent/internal/mcp"
 	"go-agent/internal/plan"
 )
-
-// newTestPlanState 构造可注入 stdin/stdout 的 plan.State（TTY 显式指定）。
-func newTestPlanState(autoApprove, tty bool, stdin string) *plan.State {
-	return &plan.State{
-		AutoApprove: autoApprove,
-		TTY:         tty,
-		Stdin:       strings.NewReader(stdin),
-		Stdout:      &bytes.Buffer{},
-	}
-}
-
-// TestDispatchTool：本地工具路由 + 未知工具返回 Error 字符串（MCP 路由由 mcp 包测试覆盖，
-// plan 态只读边界由 TestPlanModeRestrictions 覆盖）。
-func TestDispatchTool(t *testing.T) {
-	ps := newTestPlanState(false, true, "")
-	if got, _ := dispatchTool("no_such_tool", `{}`, nil, time.Second, ps); got != "Error: Unknown tool 'no_such_tool'" {
-		t.Errorf("未知工具 = %q", got)
-	}
-	if got, _ := dispatchTool("bash", `{"command":"echo routed"}`, nil, 10*time.Second, ps); got != "routed\n" {
-		t.Errorf("bash 路由 = %q", got)
-	}
-	if got, _ := dispatchTool("write", `{"path":"`+t.TempDir()+`/d.txt","content":"x"}`, nil, time.Second, ps); !strings.HasPrefix(got, "Successfully wrote") {
-		t.Errorf("write 路由 = %q", got)
-	}
-	if got, _ := dispatchTool("bash", `{bad json`, nil, time.Second, ps); !strings.HasPrefix(got, "Error: invalid tool arguments") {
-		t.Errorf("坏参数 = %q", got)
-	}
-	// enter_plan 经 dispatch 进入计划态
-	if got, _ := dispatchTool("enter_plan", `{}`, nil, time.Second, ps); !strings.Contains(got, "You are in Plan mode") {
-		t.Errorf("dispatch enter_plan = %q", got)
-	}
-	if !ps.Active {
-		t.Error("enter_plan 后应处于 plan 态")
-	}
-}
-
-// TestPlanModeRestrictions：plan 态只读边界。write/edit/bash/MCP 被禁且错误消息指明出路；
-// read/glob/grep 放行。
-func TestPlanModeRestrictions(t *testing.T) {
-	ps := newTestPlanState(false, true, "")
-	ps.Active = true
-	registry := map[string]mcp.Tool{"srv__t": {Name: "t", Registered: "srv__t"}}
-	blocked := []struct{ name, args string }{
-		{"write", `{"path":"/tmp/x","content":"y"}`},
-		{"edit", `{"path":"/tmp/x","old_string":"a","new_string":"b"}`},
-		{"bash", `{"command":"echo hi"}`},
-		{"srv__t", `{}`},
-	}
-	for _, tc := range blocked {
-		got, _ := dispatchTool(tc.name, tc.args, registry, 0, ps)
-		if !strings.HasPrefix(got, "Error: ") || !strings.Contains(got, "plan mode") || !strings.Contains(got, "submit_plan") {
-			t.Errorf("plan 态调用 %s 应被拦截并指明出路，实际: %q", tc.name, got)
-		}
-	}
-	if got, _ := dispatchTool("read", `{"path":"agent.go","limit":1}`, registry, 10*time.Second, ps); strings.HasPrefix(got, "Error:") {
-		t.Errorf("plan 态 read 不应被拦截: %q", got)
-	}
-	if got, _ := dispatchTool("glob", `{"pattern":"*.go"}`, registry, 10*time.Second, ps); strings.HasPrefix(got, "Error:") {
-		t.Errorf("plan 态 glob 不应被拦截: %q", got)
-	}
-	if got, _ := dispatchTool("grep", `{"pattern":"package","path":"."}`, registry, 10*time.Second, ps); strings.HasPrefix(got, "Error:") {
-		t.Errorf("plan 态 grep 不应被拦截: %q", got)
-	}
-}
 
 // bodyCollector 线程安全地收集请求体：handler goroutine 写、测试 goroutine 读，必须互斥。
 type bodyCollector struct {
@@ -217,5 +153,55 @@ func TestRunPlanFailClosed(t *testing.T) {
 	}
 	if n := collector.count(); n != 1 {
 		t.Errorf("请求次数 = %d, want 1（终止后不再请求）", n)
+	}
+}
+
+// respCall 构造一个返回单个 function_call 的响应 JSON。
+func respCall(name, argsJSON string) string {
+	return fmt.Sprintf(`{"id":"resp_x","object":"response","created_at":1,"status":"completed","model":"m","output":[{"type":"function_call","id":"fc_x","call_id":"call_x","name":"%s","arguments":%q,"status":"completed"}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`, name, argsJSON)
+}
+
+// TestRunToolRouting：工具路由与 plan 态守卫经 Run 的公开 interface 验证
+// （registry 化后包内 dispatchTool 已删除，测试不再越过 interface）。
+func TestRunToolRouting(t *testing.T) {
+	cases := []struct {
+		name   string
+		resp   string
+		plan   *plan.State
+		wantIn string // 第二轮请求 input 中应出现的回填文本
+	}{
+		{"unknown tool", respCall("no_such_tool", `{}`), plan.NewState(false), "Error: Unknown tool 'no_such_tool'"},
+		{"bad arguments", respCall("bash", `{bad json`), plan.NewState(false), "Error: invalid tool arguments"},
+		{"plan blocks write", respCall("write", `{"path":"/tmp/x","content":"y"}`),
+			&plan.State{Active: true, Stdin: strings.NewReader(""), Stdout: &bytes.Buffer{}},
+			"Error: write is blocked in plan mode"},
+		{"plan allows read", respCall("read", `{"path":"agent.go","limit":1}`),
+			&plan.State{Active: true, Stdin: strings.NewReader(""), Stdout: &bytes.Buffer{}},
+			"// Package agent"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := config.Load(t.TempDir())
+			collector, client := fakeResponsesServer(t, []string{tc.resp, respFinalText})
+			rt.Client = client
+			got := Run("task", Options{
+				Runtime: rt,
+				MaxIter: 3,
+				Timeout: 10 * time.Second,
+				Plan:    tc.plan,
+				Out:     &bytes.Buffer{},
+				Err:     &bytes.Buffer{},
+			})
+			if got != "all done" {
+				t.Fatalf("Run = %q, want %q", got, "all done")
+			}
+			if n := collector.count(); n != 2 {
+				t.Fatalf("请求次数 = %d, want 2", n)
+			}
+			input, _ := json.Marshal(collector.at(1)["input"])
+			if !strings.Contains(string(input), tc.wantIn) {
+				t.Errorf("第二轮回填缺少 %q，实际: %s", tc.wantIn, input)
+			}
+		})
 	}
 }

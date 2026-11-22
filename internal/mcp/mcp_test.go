@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"os"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -116,8 +115,9 @@ func TestMCPClient(t *testing.T) {
 	if len(tools) != 1 || tools[0].Registered != "fake__echo" || tools[0].Name != "echo" {
 		t.Fatalf("发现的工具 = %+v, want fake__echo", tools)
 	}
-	if got := c.CallTool("echo", map[string]any{"text": "hi"}, 10*time.Second); got != "ECHO: hi" {
-		t.Errorf("callTool = %q, want ECHO: hi", got)
+	got, err := c.CallTool("echo", map[string]any{"text": "hi"}, 10*time.Second)
+	if err != nil || got != "ECHO: hi" {
+		t.Errorf("callTool = %q, err=%v, want ECHO: hi", got, err)
 	}
 }
 
@@ -132,9 +132,8 @@ func TestMCPClientTimeout(t *testing.T) {
 		t.Fatalf("mcpStart: %v", err)
 	}
 	defer Shutdown(c)
-	got := c.CallTool("echo", map[string]any{"text": "hi"}, 300*time.Millisecond)
-	if !strings.HasPrefix(got, "Error:") {
-		t.Errorf("超时应返回 Error，得到 %q", got)
+	if _, err := c.CallTool("echo", map[string]any{"text": "hi"}, 300*time.Millisecond); err == nil {
+		t.Error("超时应返回错误")
 	}
 }
 
@@ -153,15 +152,20 @@ func TestMCPClientConcurrent(t *testing.T) {
 	defer Shutdown(c)
 	var wg sync.WaitGroup
 	results := make([]string, 2)
+	errs := make([]error, 2)
 	for i, text := range []string{"one", "two"} {
 		wg.Add(1)
 		go func(i int, text string) {
 			defer wg.Done()
-			results[i] = c.CallTool("echo", map[string]any{"text": text}, 5*time.Second)
+			results[i], errs[i] = c.CallTool("echo", map[string]any{"text": text}, 5*time.Second)
 		}(i, text)
 	}
 	wg.Wait()
 	for i, text := range []string{"one", "two"} {
+		if errs[i] != nil {
+			t.Errorf("并发调用 %d 错误: %v", i, errs[i])
+			continue
+		}
 		if want := "ECHO: " + text; results[i] != want {
 			t.Errorf("并发调用 %d = %q, want %q", i, results[i], want)
 		}

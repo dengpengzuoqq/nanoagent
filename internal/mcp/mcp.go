@@ -5,6 +5,7 @@ package mcp
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -206,11 +207,11 @@ func (c *Client) notify(method string, params any) {
 }
 
 // CallTool 调用 MCP 工具，把 content 里所有 text 项拼接为字符串返回；
-// JSON-RPC 错误或 isError 结果都归一为 "Error: ..." 字符串，保证 agent loop 继续。
-func (c *Client) CallTool(name string, args map[string]any, timeout time.Duration) string {
+// JSON-RPC 错误与 isError 结果都转为 error，错误编码由调用方统一处理。
+func (c *Client) CallTool(name string, args map[string]any, timeout time.Duration) (string, error) {
 	raw, err := c.request("tools/call", map[string]any{"name": name, "arguments": args}, timeout)
 	if err != nil {
-		return fmt.Sprintf("Error: %v", err)
+		return "", err
 	}
 	var result struct {
 		Content []struct {
@@ -220,7 +221,7 @@ func (c *Client) CallTool(name string, args map[string]any, timeout time.Duratio
 		IsError bool `json:"isError"`
 	}
 	if err := json.Unmarshal(raw, &result); err != nil {
-		return fmt.Sprintf("Error: MCP 工具 %s 响应解析失败: %v", name, err)
+		return "", fmt.Errorf("MCP 工具 %s 响应解析失败: %w", name, err)
 	}
 	var texts []string
 	for _, item := range result.Content {
@@ -230,9 +231,12 @@ func (c *Client) CallTool(name string, args map[string]any, timeout time.Duratio
 	}
 	joined := strings.Join(texts, "\n")
 	if result.IsError {
-		return "Error: " + joined
+		if joined == "" {
+			joined = "tool reported an error"
+		}
+		return "", errors.New(joined)
 	}
-	return joined
+	return joined, nil
 }
 
 // Shutdown 关闭 stdin 并 kill 子进程。

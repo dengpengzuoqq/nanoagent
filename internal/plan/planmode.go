@@ -8,8 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
-
-	"github.com/openai/openai-go/v3/responses"
+	"time"
 
 	"go-agent/internal/tools"
 )
@@ -134,33 +133,45 @@ func (p *State) askApproval() Decision {
 	return Decision{Kind: DecisionReject, Result: fmt.Sprintf("%s\nThe user reviewed your plan and rejected it with feedback: %s\nRevise your plan and call submit_plan again.", PlanEnterReminder, feedback)}
 }
 
-// PlanGuard 裁决 plan 态的只读边界：返回 true 表示该调用被拦截，result 是要回给模型的
-// Error 字符串。isMCPTool 由调用方提供且必须非 nil，plan 包因此不必知道 MCP 注册表的具体类型。
-func (p *State) PlanGuard(name string, isMCPTool func(string) bool) (string, bool) {
-	if !p.Active {
-		return "", false
-	}
-	switch name {
-	case "write", "edit", "bash":
-		return fmt.Sprintf("Error: %s is blocked in plan mode (read-only); submit your plan with submit_plan first", name), true
-	}
-	if isMCPTool(name) {
-		return fmt.Sprintf("Error: MCP tool %s is blocked in plan mode (read-only); submit your plan with submit_plan first", name), true
-	}
-	return "", false
-}
+// FatalError 表示计划模式 fail-closed：终止整个运行，Message 写入最终输出。
+type FatalError struct{ Message string }
 
-// PlanTools 是计划模式专用工具：enter_plan（进入）与 submit_plan（提交批准）。
-// 两个工具常驻工具表，误用时由 State 守卫返回错误。
-var PlanTools = []responses.ToolUnionParam{
-	tools.FunctionTool("enter_plan", "Enter plan mode: switch to read-only planning. In plan mode you explore the codebase (read/glob/grep only), draft a plan, and submit it with submit_plan for user approval. Use for complex multi-step tasks", map[string]any{
-		"type":       "object",
-		"properties": map[string]any{},
-		"required":   []string{},
-	}),
-	tools.FunctionTool("submit_plan", "Submit your complete plan for user approval. Only usable in plan mode. If approved, execution begins; if rejected, you get feedback and stay in plan mode to revise", map[string]any{
-		"type":       "object",
-		"properties": map[string]any{"plan": map[string]any{"type": "string"}},
-		"required":   []string{"plan"},
-	}),
+func (e *FatalError) Error() string { return e.Message }
+
+// PlanTools 构造计划模式专用工具：enter_plan（进入）与 submit_plan（提交批准）。
+// ReadOnly=true：plan 态可用；误用时经 DecisionError 回给模型。
+func PlanTools(p *State) []tools.Tool {
+	return []tools.Tool{
+		{
+			Name:        "enter_plan",
+			Description: "Enter plan mode: switch to read-only planning. In plan mode you explore the codebase (read/glob/grep only), draft a plan, and submit it with submit_plan for user approval. Use for complex multi-step tasks",
+			Schema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+				"required":   []string{},
+			},
+			ReadOnly: true,
+			Execute: func(args map[string]any, timeout time.Duration) (string, error) {
+				return p.EnterPlan(), nil
+			},
+		},
+		{
+			Name:        "submit_plan",
+			Description: "Submit your complete plan for user approval. Only usable in plan mode. If approved, execution begins; if rejected, you get feedback and stay in plan mode to revise",
+			Schema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"plan": map[string]any{"type": "string"}},
+				"required":   []string{"plan"},
+			},
+			ReadOnly: true,
+			Execute: func(args map[string]any, timeout time.Duration) (string, error) {
+				planText, _ := args["plan"].(string)
+				d := p.SubmitPlan(planText)
+				if d.Fatal != "" {
+					return "", &FatalError{Message: d.Fatal}
+				}
+				return d.Result, nil
+			},
+		},
+	}
 }

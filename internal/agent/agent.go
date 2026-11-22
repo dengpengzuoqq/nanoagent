@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -20,57 +21,6 @@ import (
 	"go-agent/internal/prompt"
 	"go-agent/internal/tools"
 )
-
-// dispatchTool 按名称分发工具调用（本地工具 + plan 模式工具 + MCP 注册工具）。
-// 返回 (tool result, fatal)：fatal 非空表示计划模式 fail-closed，调用方终止整个运行；
-// 其余任何错误都以字符串返回，保证 agent loop 继续。
-func dispatchTool(name, argsJSON string, mcpRegistry map[string]mcp.Tool, timeout time.Duration, ps *plan.State) (string, string) {
-	var args map[string]any
-	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return fmt.Sprintf("Error: invalid tool arguments: %v", err), ""
-	}
-	str := func(key string) string { s, _ := args[key].(string); return s }
-	intArg := func(key string) int { n, _ := args[key].(float64); return int(n) }
-
-	// 计划模式工具（模式守卫在 plan.State 内）
-	switch name {
-	case "enter_plan":
-		return ps.EnterPlan(), ""
-	case "submit_plan":
-		d := ps.SubmitPlan(str("plan"))
-		return d.Result, d.Fatal
-	}
-	// plan 态只读边界：硬禁 write/edit/bash/MCP；read/glob/grep 放行
-	isMCPTool := func(n string) bool { _, ok := mcpRegistry[n]; return ok }
-	if msg, blocked := ps.PlanGuard(name, isMCPTool); blocked {
-		return msg, ""
-	}
-
-	switch name {
-	case "bash":
-		return tools.Bash(str("command"), timeout), ""
-	case "read":
-		return tools.Read(str("path"), intArg("offset"), intArg("limit")), ""
-	case "write":
-		return tools.Write(str("path"), str("content")), ""
-	case "edit":
-		return tools.Edit(str("path"), str("old_string"), str("new_string")), ""
-	case "glob":
-		return tools.Glob(str("pattern")), ""
-	case "grep":
-		path := str("path")
-		if path == "" {
-			path = "."
-		}
-		return tools.Grep(str("pattern"), path, timeout), ""
-	default:
-		if t, ok := mcpRegistry[name]; ok {
-			// MCP 工具参数原样透传（复用上方已解析的 args）
-			return t.Server.CallTool(t.Name, args, timeout), ""
-		}
-		return fmt.Sprintf("Error: Unknown tool '%s'", name), ""
-	}
-}
 
 // Options 聚合 Run 的运行参数与依赖。
 type Options struct {
@@ -97,13 +47,25 @@ func Run(userMessage string, opts Options) string {
 		errW = os.Stderr
 	}
 	config.Logger.Debug("run_agent 启动", "user_message", userMessage, "max_iterations", maxIterations)
-	// 本地工具 + 计划模式工具 + MCP 工具并入工具表，注册名 -> 工具 的映射用于分发
-	toolList := append([]responses.ToolUnionParam{}, tools.LocalTools...)
-	toolList = append(toolList, plan.PlanTools...)
-	mcpRegistry := map[string]mcp.Tool{}
-	for _, t := range mcpTools {
-		toolList = append(toolList, tools.FunctionTool(t.Registered, t.Description, t.Schema))
-		mcpRegistry[t.Registered] = t
+	// 本地工具 + 计划模式工具 + MCP 工具并入 registry，schema 经 FunctionTool 并入工具表
+	toolList := []responses.ToolUnionParam{}
+	registry := map[string]tools.Tool{}
+	add := func(ts []tools.Tool) {
+		for _, t := range ts {
+			toolList = append(toolList, tools.FunctionTool(t.Name, t.Description, t.Schema))
+			registry[t.Name] = t
+		}
+	}
+	add(tools.LocalTools)
+	add(plan.PlanTools(ps))
+	for _, mt := range mcpTools {
+		name := mt.Registered
+		server := mt.Server
+		toolName := mt.Name
+		add([]tools.Tool{{Name: name, Description: mt.Description, Schema: mt.Schema, ReadOnly: false,
+			Execute: func(args map[string]any, timeout time.Duration) (string, error) {
+				return server.CallTool(toolName, args, timeout)
+			}}})
 	}
 	systemPrompt := prompt.BuildSystemPrompt(rt)
 	if ps.Active {
@@ -163,11 +125,41 @@ loop:
 		for _, call := range toolCalls {
 			fmt.Fprintf(out, "[Tool-%s] %s(%s)\n", call.CallID, call.Name, call.Arguments)
 			config.Logger.Debug("执行工具", "name", call.Name, "call_id", call.CallID)
-			result, fatal := dispatchTool(call.Name, call.Arguments, mcpRegistry, timeout, ps)
-			// 非 TTY 未传 --auto-approve 等场景：fail-closed，立即终止整个运行
-			if fatal != "" {
-				finalText = fatal
-				reachedLimit = false
+
+			// 工具分发：registry 查表执行；plan 态只读边界查 ReadOnly，不按工具名硬编码
+			var args map[string]any
+			parseErr := json.Unmarshal([]byte(call.Arguments), &args)
+			var result string
+			var fatal bool
+			switch {
+			case parseErr != nil:
+				result = fmt.Sprintf("Error: invalid tool arguments: %v", parseErr)
+			default:
+				tool, ok := registry[call.Name]
+				if !ok {
+					result = fmt.Sprintf("Error: Unknown tool '%s'", call.Name)
+					break
+				}
+				if ps.Active && !tool.ReadOnly {
+					result = fmt.Sprintf("Error: %s is blocked in plan mode (read-only); submit your plan with submit_plan first", call.Name)
+					break
+				}
+				r, err := tool.Execute(args, timeout)
+				var fe *plan.FatalError
+				if errors.As(err, &fe) {
+					// 非 TTY 未传 --auto-approve 等场景：fail-closed，立即终止整个运行
+					finalText = fe.Message
+					reachedLimit = false
+					fatal = true
+					break
+				}
+				if err != nil {
+					result = fmt.Sprintf("Error: %v", err)
+					break
+				}
+				result = r
+			}
+			if fatal {
 				break loop
 			}
 			// 工具结果原文直写 errW，不经 slog 转义
