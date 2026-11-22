@@ -6,9 +6,9 @@ llama-server 是**独立外部进程**，不是 Go 依赖；未启动或未配�
 
 ## 1. 安装 llama-server
 
-本机为 AMD 集显（RENOIR，RADV Vulkan 驱动正常，共享显存已分配 **8GB**）。要用集显跑模型，需要 **Vulkan 后端构建**的 llama.cpp——Arch 仓库的 `llama-cpp` 包是 CPU-only 构建，直接安装无法 offload 到 GPU。
+本机为 AMD 集显（RENOIR，RADV Vulkan 驱动正常，共享显存已分配 **8GB**）。用集显跑模型，必须使用 **Vulkan 后端构建**的 llama.cpp（Arch 仓库的 `llama-cpp` 包不带 GPU 后端，不可用于 offload）。
 
-**GPU 路线（推荐，已在本机验证）**：llama.cpp 官方每日构建的 Vulkan 预编译包（35 MB，自包含 `libggml-vulkan` 等后端，`RUNPATH=$ORIGIN` 无需装库）：
+**安装方式（已在本机验证）**：llama.cpp 官方每日构建的 Vulkan 预编译包（35 MB，自包含 `libggml-vulkan` 等后端，`RUNPATH=$ORIGIN` 无需装库）：
 
 ```bash
 # 从 releases 取最新 build 号（本例 b12631），下载解压后整体移入 ~/.local/bin
@@ -20,14 +20,6 @@ hash -r && llama-server --version   # 应显示 build 号
 ```
 
 备选：源码编译（`cmake -B build -DGGML_VULKAN=ON && cmake --build build -j`，需 `vulkan-headers` 与 `shaderc`）。本机 RADV 驱动已就绪（`vulkaninfo` 可见 RENOIR 设备）。
-
-**CPU 路线（备选）**：
-
-```bash
-sudo pacman -S llama-cpp
-```
-
-CPU 跑 0.6B 嵌入模型也是毫秒级，只是 `-ngl` 无效（GPU offload 失效）。
 
 ## 2. 下载模型并启动服务
 
