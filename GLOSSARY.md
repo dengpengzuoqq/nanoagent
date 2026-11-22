@@ -9,5 +9,5 @@
 - **Memory Entry**：跨任务记忆最小单元——`memory/` 目录下一个事实一个文件（kebab-slug 即 ID），frontmatter 含 name/description/type(lesson|fact|preference|constraint)/tags/weight/pinned/created_at/last_accessed/source；`MEMORY.md` 为纯索引（每行 ≤150 字符），禁止写正文。
 - **Extraction**：任务末一次 LLM 调用（memory.Extract），对全量条目做 ADD/UPDATE/DELETE 决策（Memory-R1 动作空间），兼任压缩与旧格式惰性迁移；先整批校验再应用（原子性），失败静默保持 memory 原样。
 - **memory_search**：第 9 个工具（ReadOnly），长尾记忆检索——bigram 重合度 × weight 加权 top-k，命中强化 weight +0.5（封顶 10）并刷新 last_accessed。
-- **Embedding fallback**：`Runtime.Embeddings`（本地 llama-server + Qwen3-Embedding-0.6B F16）配置后 memory_search 打分切换为嵌入余弦，上线冒烟校验不过或未配置时回退 bigram；检索结果只进对话历史，不进 instructions。
+- **Embedding fallback**：`Runtime.Embeddings`（本地 llama-server + Qwen3-Embedding-0.6B F16）配置后 memory_search 打分切换为嵌入余弦，上线冒烟校验不过或未配置时回退 bigram；检索结果只进对话历史，不进 instructions。安装文档：[docs/memory-embeddings.md](docs/memory-embeddings.md)。
 - **升级备忘**：scratchpad 层（pi-memory 的会话工作记忆）、sqlite FTS、全局记忆层、sleep-time 整理、RL 记忆策略——均暂不做，留升级位。
