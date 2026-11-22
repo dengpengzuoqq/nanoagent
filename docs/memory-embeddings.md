@@ -8,13 +8,18 @@ llama-server 是**独立外部进程**，不是 Go 依赖；未启动或未配�
 
 本机为 AMD 集显（RENOIR，RADV Vulkan 驱动正常，共享显存已分配 **8GB**）。要用集显跑模型，需要 **Vulkan 后端构建**的 llama.cpp——Arch 仓库的 `llama-cpp` 包是 CPU-only 构建，直接安装无法 offload 到 GPU。
 
-**GPU 路线（推荐）**：
+**GPU 路线（推荐，已在本机验证）**：llama.cpp 官方每日构建的 Vulkan 预编译包（35 MB，自包含 `libggml-vulkan` 等后端，`RUNPATH=$ORIGIN` 无需装库）：
 
 ```bash
-yay -S llama-cpp-vulkan    # AUR Vulkan 变体
+# 从 releases 取最新 build 号（本例 b12631），下载解压后整体移入 ~/.local/bin
+mkdir -p ~/llama-vulkan && cd ~/llama-vulkan
+curl -sL -o vulkan.tar.gz \
+  "https://github.com/ggml-org/llama.cpp/releases/download/b12631/llama-b12631-bin-ubuntu-vulkan-x64.tar.gz"
+tar xzf vulkan.tar.gz && mv llama-b12631/* ~/.local/bin/ && cd - && rm -rf ~/llama-vulkan
+hash -r && llama-server --version   # 应显示 build 号
 ```
 
-备选：从 [llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases) 下载 ubuntu-vulkan 预编译包，或源码编译（`cmake -B build -DGGML_VULKAN=ON && cmake --build build -j`，需 `vulkan-headers` 与 `shaderc`；本机 RADV 驱动已就绪，`vulkaninfo` 可见 RENOIR 设备）。
+备选：源码编译（`cmake -B build -DGGML_VULKAN=ON && cmake --build build -j`，需 `vulkan-headers` 与 `shaderc`）。本机 RADV 驱动已就绪（`vulkaninfo` 可见 RENOIR 设备）。
 
 **CPU 路线（备选）**：
 
@@ -58,7 +63,7 @@ llama-server -m ~/Downloads/Qwen3-Embedding-0.6B-Q8_0.gguf \
 - `--alias qwen3-embedding`：给模型稳定名字，供 `/v1/embeddings` 请求的 `model` 字段使用
 - 另有 `-hf Qwen/Qwen3-Embedding-0.6B-GGUF:F16` 自动下载模式，但主线按"先下载、后启动"操作，便于离线使用与版本固定
 
-**offload 验证**：启动日志出现 `offloaded 28/28 layers to GPU`（或类似层数全卸载的行）即成功；若显示 0 层 offload，说明当前 llama-server 是 CPU-only 构建，回到第 1 节换 Vulkan 版。
+**offload 验证**：启动日志出现 `... assigned to device Vulkan0`（张量已分配到集显）且 `/v1/embeddings` 正常返回向量即成功；部分融合算子（Flash Attention K/V）可能回退 CPU，属 RADV 正常现象，不影响使用。若日志完全无 Vulkan 字样，说明当前 llama-server 是 CPU-only 构建，回到第 1 节换 Vulkan 版。
 
 ## 3. 验证服务
 
