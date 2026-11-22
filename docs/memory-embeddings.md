@@ -47,22 +47,6 @@ llama-server -m ~/Downloads/Qwen3-Embedding-0.6B-Q8_0.gguf \
 - 0.6B 嵌入模型 CPU 推理毫秒级响应，GPU 非必需；有 GPU 后端时可加 `-ngl 999` 全量卸载
 - 另有 `-hf Qwen/Qwen3-Embedding-0.6B-GGUF:F16` 自动下载模式，但主线按"先下载、后启动"操作，便于离线使用与版本固定
 
-**常驻运行**（可选）——`~/.config/systemd/user/nanoagent-embeddings.service`（`%h` 为用户主目录）：
-
-```ini
-[Unit]
-Description=llama-server embeddings for nanoAgent (Qwen3-Embedding-0.6B)
-[Service]
-ExecStart=/usr/bin/llama-server -m %h/Downloads/Qwen3-Embedding-0.6B-Q8_0.gguf --embeddings --port 8081 --alias qwen3-embedding
-Restart=on-failure
-[Install]
-WantedBy=default.target
-```
-
-```bash
-systemctl --user daemon-reload && systemctl --user enable --now nanoagent-embeddings
-```
-
 ## 3. 验证服务
 
 ```bash
