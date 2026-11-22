@@ -62,7 +62,8 @@ type Paths struct {
 	NanoAgentsMD  string // system prompt 注入的项目说明
 	RulesDir      string // 规则全文 .nanoagents/rules/*.md
 	SkillsDir     string // 技能列表 .nanoagents/skills/*.json
-	MemoryPath    string // 跨任务记忆
+	MemoryDir     string // 跨任务记忆目录（MEMORY.md 索引 + 每事实一文件）
+	MemoryPath    string // 旧格式时间线文件（迁移候选，删除于 memory 改造接线完成时）
 	MCPConfigPath string // MCP server 配置
 }
 
@@ -72,6 +73,7 @@ func (p Paths) join(root string) Paths {
 		NanoAgentsMD:  j(p.NanoAgentsMD),
 		RulesDir:      j(p.RulesDir),
 		SkillsDir:     j(p.SkillsDir),
+		MemoryDir:     j(p.MemoryDir),
 		MemoryPath:    j(p.MemoryPath),
 		MCPConfigPath: j(p.MCPConfigPath),
 	}
@@ -82,6 +84,7 @@ var relativePaths = Paths{
 	NanoAgentsMD:  "nanoagents.md",
 	RulesDir:      ".nanoagents/rules",
 	SkillsDir:     ".nanoagents/skills",
+	MemoryDir:     ".nanoagents/memory",
 	MemoryPath:    ".nanoagents/memory.md",
 	MCPConfigPath: ".nanoagents/mcp.json",
 }
