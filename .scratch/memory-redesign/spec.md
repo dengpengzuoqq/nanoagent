@@ -60,8 +60,8 @@ type Entry struct {
 ## 8. 嵌入路径（已定稿）
 
 - 引擎：**llama-server**（单机桌面最轻；vLLM/SGLang 经调研判定过重：torch 全家桶、吞吐优势吃不到、SGLang CPU 仅 Xeon AMX）
-- 模型：`ggml-org/Qwen3-Embedding-0.6B-GGUF` **F16**（约 1.2 GB，1024 维；避开重度量化质量风险）
-- 启动：`llama-server -hf ggml-org/Qwen3-Embedding-0.6B-GGUF:F16 --embeddings --port 8081`
+- 模型：`Qwen/Qwen3-Embedding-0.6B-GGUF` **F16**（1142 MB，1024 维；避开重度量化质量风险；Q8_0 610 MB 为可选轻量替代）
+- 启动：`llama-server -hf Qwen/Qwen3-Embedding-0.6B-GGUF:F16 --embeddings --port 8081`
 - 接入：`Runtime.Embeddings{BaseURL: "http://127.0.0.1:8081/v1", Model: "qwen3-embedding", APIKey}`；**BaseURL 为空回退 bigram 打分**
 - **上线冒烟校验**：相似中文句对得分 > 无关句对，不通过保持 bigram
 - 升级闭环：`memory_search` 的 Tool interface 不变，打分函数 bigram ↔ 余弦可互换
