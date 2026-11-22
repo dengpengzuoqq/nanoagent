@@ -17,6 +17,7 @@ import (
 
 	"go-agent/internal/config"
 	"go-agent/internal/mcp"
+	"go-agent/internal/memory"
 	"go-agent/internal/plan"
 	"go-agent/internal/prompt"
 	"go-agent/internal/tools"
@@ -58,6 +59,7 @@ func Run(userMessage string, opts Options) string {
 	}
 	add(tools.LocalTools)
 	add(plan.PlanTools(ps))
+	add([]tools.Tool{memory.SearchTool(rt.Paths.MemoryDir, memory.NewScorer(rt))})
 	for _, mt := range mcpTools {
 		add([]tools.Tool{mt.RegistryTool()})
 	}

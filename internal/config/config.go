@@ -105,22 +105,37 @@ func newConfig(env map[string]string) RuntimeConfig {
 	}
 }
 
+// EmbeddingsConfig 是相似度检索的嵌入服务子配置（OpenAI 兼容 /v1/embeddings，
+// 如本地 llama-server）。BaseURL 为空 = 未配置，memory_search 回退 bigram 打分。
+type EmbeddingsConfig struct {
+	BaseURL string // 如 http://127.0.0.1:8081/v1
+	Model   string // 如 qwen3-embedding
+	APIKey  string
+}
+
 // Runtime 是一次运行所需的全部环境：配置、路径布局与 API client。
 // main 用 Load(".") 构造（生产行为等同旧的相对路径）；测试用 Load(t.TempDir())。
 type Runtime struct {
-	Config RuntimeConfig
-	Paths  Paths
-	Client openai.Client
+	Config     RuntimeConfig
+	Paths      Paths
+	Client     openai.Client
+	Embeddings EmbeddingsConfig // 相似度检索嵌入服务（可选）
 }
 
 // Load 读取 root 下的 test.env，拼接路径布局并构造 client。
 // 配置文件缺失返回空配置（不退出），由调用方校验必需键。
 func Load(root string) Runtime {
-	cfg := newConfig(loadEnv(filepath.Join(root, "test.env")))
+	env := loadEnv(filepath.Join(root, "test.env"))
+	cfg := newConfig(env)
 	return Runtime{
 		Config: cfg,
 		Client: newClient(cfg),
 		Paths:  relativePaths.join(root),
+		Embeddings: EmbeddingsConfig{
+			BaseURL: env["OPENAI_EMBEDDINGS_BASE_URL"],
+			Model:   env["OPENAI_EMBEDDINGS_MODEL"],
+			APIKey:  env["OPENAI_EMBEDDINGS_API_KEY"],
+		},
 	}
 }
 

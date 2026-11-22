@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"go-agent/internal/config"
+	"go-agent/internal/memory"
 )
 
 // BuildSystemPrompt 组装 system prompt，顺序固定：
@@ -32,9 +33,8 @@ func BuildSystemPrompt(rt config.Runtime) string {
 		}
 		parts = append(parts, "# Skills\n"+strings.Join(lines, "\n"))
 	}
-	if mem := loadMemory(rt.Paths.MemoryPath); mem != "" {
-		parts = append(parts, "# Previous Context\n"+mem)
-	}
+	// Memory：常驻区（索引 + 高权重条目正文）与写入纪律（长尾靠 memory_search 检索）
+	parts = append(parts, memory.SystemSection(memory.Open(rt.Paths.MemoryDir)))
 	return strings.Join(parts, "\n\n")
 }
 
@@ -85,19 +85,6 @@ func loadSkills(dir string) []skillInfo {
 		skills = append(skills, s)
 	}
 	return skills
-}
-
-// loadMemory 读取 memory 文件（.nanoagents/memory.md）的末 50 行作为跨任务上下文；文件缺失或损坏返回空串。
-func loadMemory(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	lines := strings.Split(string(data), "\n")
-	if len(lines) > 50 {
-		lines = lines[len(lines)-50:]
-	}
-	return strings.Join(lines, "\n")
 }
 
 // AppendMemory 在任务结束后把 task 和最终结果带时间戳追加到 memory 文件；失败静默。
