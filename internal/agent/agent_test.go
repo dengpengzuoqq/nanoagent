@@ -172,6 +172,10 @@ func TestRunToolRouting(t *testing.T) {
 	}{
 		{"unknown tool", respCall("no_such_tool", `{}`), plan.NewState(false), "Error: Unknown tool 'no_such_tool'"},
 		{"bad arguments", respCall("bash", `{bad json`), plan.NewState(false), "Error: invalid tool arguments"},
+		{"submit outside plan", respCall("submit_plan", `{"plan":"x"}`), plan.NewState(false), "Error: submit_plan can only be used in plan mode"},
+		{"empty plan", respCall("submit_plan", `{"plan":"   "}`),
+			&plan.State{Active: true, Stdin: strings.NewReader(""), Stdout: &bytes.Buffer{}},
+			"Error: plan cannot be empty"},
 		{"plan blocks write", respCall("write", `{"path":"/tmp/x","content":"y"}`),
 			&plan.State{Active: true, Stdin: strings.NewReader(""), Stdout: &bytes.Buffer{}},
 			"Error: write is blocked in plan mode"},

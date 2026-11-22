@@ -42,9 +42,9 @@ func FunctionTool(name, description string, parameters map[string]any) responses
 	}
 }
 
-// strArg / intArg 从工具参数 map 取值（缺失返回零值）。
-func strArg(args map[string]any, key string) string { s, _ := args[key].(string); return s }
-func intArg(args map[string]any, key string) int    { n, _ := args[key].(float64); return int(n) }
+// StrArg / IntArg 从工具参数 map 取值（缺失返回零值）。
+func StrArg(args map[string]any, key string) string { s, _ := args[key].(string); return s }
+func IntArg(args map[string]any, key string) int    { n, _ := args[key].(float64); return int(n) }
 
 // LocalTools 是本地执行工具集。
 var LocalTools = []Tool{
@@ -56,7 +56,7 @@ var LocalTools = []Tool{
 			"required":   []string{"command"},
 		},
 		Execute: func(args map[string]any, timeout time.Duration) (string, error) {
-			return Bash(strArg(args, "command"), timeout)
+			return Bash(StrArg(args, "command"), timeout)
 		},
 	},
 	{
@@ -71,7 +71,7 @@ var LocalTools = []Tool{
 			"required": []string{"path"},
 		},
 		Execute: func(args map[string]any, timeout time.Duration) (string, error) {
-			return Read(strArg(args, "path"), intArg(args, "offset"), intArg(args, "limit"))
+			return Read(StrArg(args, "path"), IntArg(args, "offset"), IntArg(args, "limit"))
 		},
 	},
 	{
@@ -85,7 +85,7 @@ var LocalTools = []Tool{
 			"required": []string{"path", "content"},
 		},
 		Execute: func(args map[string]any, timeout time.Duration) (string, error) {
-			return Write(strArg(args, "path"), strArg(args, "content"))
+			return Write(StrArg(args, "path"), StrArg(args, "content"))
 		},
 	},
 	{
@@ -100,7 +100,7 @@ var LocalTools = []Tool{
 			"required": []string{"path", "old_string", "new_string"},
 		},
 		Execute: func(args map[string]any, timeout time.Duration) (string, error) {
-			return Edit(strArg(args, "path"), strArg(args, "old_string"), strArg(args, "new_string"))
+			return Edit(StrArg(args, "path"), StrArg(args, "old_string"), StrArg(args, "new_string"))
 		},
 	},
 	{
@@ -111,7 +111,7 @@ var LocalTools = []Tool{
 			"required":   []string{"pattern"},
 		},
 		Execute: func(args map[string]any, timeout time.Duration) (string, error) {
-			return Glob(strArg(args, "pattern"))
+			return Glob(StrArg(args, "pattern"))
 		},
 	},
 	{
@@ -125,7 +125,7 @@ var LocalTools = []Tool{
 			"required": []string{"pattern"},
 		},
 		Execute: func(args map[string]any, timeout time.Duration) (string, error) {
-			return Grep(strArg(args, "pattern"), strArg(args, "path"), timeout)
+			return Grep(StrArg(args, "pattern"), StrArg(args, "path"), timeout)
 		},
 	},
 }

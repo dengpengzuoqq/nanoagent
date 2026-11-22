@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"go-agent/internal/config"
+	"go-agent/internal/tools"
 )
 
 // ServerConfig 是 .nanoagents/mcp.json 中 mcpServers 的单条配置（标准 MCP 配置格式）。
@@ -50,6 +51,19 @@ type Tool struct {
 	Registered  string // 对外注册名
 	Description string
 	Schema      map[string]any
+}
+
+// RegistryTool 把 MCP 工具包装成 tools.Tool adapter。ReadOnly=false：plan 态一律拦截。
+func (t Tool) RegistryTool() tools.Tool {
+	return tools.Tool{
+		Name:        t.Registered,
+		Description: t.Description,
+		Schema:      t.Schema,
+		ReadOnly:    false,
+		Execute: func(args map[string]any, timeout time.Duration) (string, error) {
+			return t.Server.CallTool(t.Name, args, timeout)
+		},
+	}
 }
 
 // rpcError 是 JSON-RPC 2.0 错误对象。

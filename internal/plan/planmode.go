@@ -4,6 +4,7 @@ package plan
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -27,8 +28,7 @@ You are NO LONGER in Plan mode. The previous Plan restrictions no longer apply. 
 type DecisionKind int
 
 const (
-	DecisionError   DecisionKind = iota // 工具级错误，回给模型继续（误用 / 空计划）
-	DecisionApprove                     // 批准：切回执行态
+	DecisionApprove DecisionKind = iota // 批准：切回执行态
 	DecisionReject                      // 拒绝：留在 plan 态，反馈随结果返回
 	DecisionFatal                       // 终止整个运行（非 TTY 未批准 / 输入中断）
 )
@@ -72,26 +72,20 @@ func isTTY(f *os.File) bool {
 	return true
 }
 
-// EnterPlan 进入计划模式；已在 plan 态则报错。
-func (p *State) EnterPlan() string {
+// EnterPlan 进入计划模式；已在 plan 态返回错误。
+func (p *State) EnterPlan() (string, error) {
 	if p.Active {
-		return "Error: already in plan mode"
+		return "", errors.New("already in plan mode")
 	}
 	p.Active = true
 	fmt.Fprintln(p.Stdout, "[Plan mode] entered (read-only; submit your plan with submit_plan)")
-	return PlanEnterReminder
+	return PlanEnterReminder, nil
 }
 
-// SubmitPlan 提交计划等待用户批准：
+// SubmitPlan 提交计划等待用户批准（仅 plan 态可调，plan 非空由调用方保证）：
 // 批准 → 切回执行态并返回 leave reminder；拒绝 → 留在 plan 态，反馈随结果返回；
 // 非 TTY 未批准 → DecisionFatal，调用方据此终止整个运行。
 func (p *State) SubmitPlan(plan string) Decision {
-	if !p.Active {
-		return Decision{Kind: DecisionError, Result: "Error: submit_plan can only be used in plan mode (call enter_plan first, or start the agent with --plan)"}
-	}
-	if strings.TrimSpace(plan) == "" {
-		return Decision{Kind: DecisionError, Result: "Error: plan cannot be empty"}
-	}
 	fmt.Fprintf(p.Stdout, "\n========== PLAN ==========\n%s\n==========================\n", plan)
 	d := p.askApproval()
 	if d.Kind == DecisionApprove {
@@ -152,7 +146,7 @@ func PlanTools(p *State) []tools.Tool {
 			},
 			ReadOnly: true,
 			Execute: func(args map[string]any, timeout time.Duration) (string, error) {
-				return p.EnterPlan(), nil
+				return p.EnterPlan()
 			},
 		},
 		{
@@ -165,9 +159,16 @@ func PlanTools(p *State) []tools.Tool {
 			},
 			ReadOnly: true,
 			Execute: func(args map[string]any, timeout time.Duration) (string, error) {
-				planText, _ := args["plan"].(string)
+				if !p.Active {
+					return "", errors.New("submit_plan can only be used in plan mode (call enter_plan first, or start the agent with --plan)")
+				}
+				planText := tools.StrArg(args, "plan")
+				if strings.TrimSpace(planText) == "" {
+					return "", errors.New("plan cannot be empty")
+				}
 				d := p.SubmitPlan(planText)
-				if d.Fatal != "" {
+				// Kind 是 fatal 的唯一裁决：Fatal 仅作载荷
+				if d.Kind == DecisionFatal {
 					return "", &FatalError{Message: d.Fatal}
 				}
 				return d.Result, nil

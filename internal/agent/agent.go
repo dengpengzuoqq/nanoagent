@@ -59,13 +59,7 @@ func Run(userMessage string, opts Options) string {
 	add(tools.LocalTools)
 	add(plan.PlanTools(ps))
 	for _, mt := range mcpTools {
-		name := mt.Registered
-		server := mt.Server
-		toolName := mt.Name
-		add([]tools.Tool{{Name: name, Description: mt.Description, Schema: mt.Schema, ReadOnly: false,
-			Execute: func(args map[string]any, timeout time.Duration) (string, error) {
-				return server.CallTool(toolName, args, timeout)
-			}}})
+		add([]tools.Tool{mt.RegistryTool()})
 	}
 	systemPrompt := prompt.BuildSystemPrompt(rt)
 	if ps.Active {

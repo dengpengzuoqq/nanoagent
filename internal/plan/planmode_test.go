@@ -16,20 +16,16 @@ func newTestState(autoApprove, tty bool, stdin string) *State {
 	}
 }
 
-// TestPlanModeGuards：模式守卫。EnterPlan 重复进入报错；SubmitPlan 仅 plan 态可用；空计划报错。
+// TestPlanModeGuards：EnterPlan 重复进入报错。SubmitPlan 的前置条件
+// （仅 plan 态可用、plan 非空）由 registry Execute 层校验，Run 级覆盖见 agent_test。
 func TestPlanModeGuards(t *testing.T) {
 	ps := newTestState(false, true, "y\n")
-	if d := ps.SubmitPlan("any plan"); d.Kind != DecisionError || !strings.HasPrefix(d.Result, "Error: submit_plan can only be used in plan mode") {
-		t.Errorf("非 plan 态 SubmitPlan = %+v", d)
+	got, err := ps.EnterPlan()
+	if err != nil || !strings.Contains(got, "You are in Plan mode") {
+		t.Errorf("首次 EnterPlan = %q, err=%v", got, err)
 	}
-	if got := ps.EnterPlan(); !strings.Contains(got, "You are in Plan mode") {
-		t.Errorf("首次 EnterPlan = %q", got)
-	}
-	if got := ps.EnterPlan(); got != "Error: already in plan mode" {
-		t.Errorf("重复 EnterPlan = %q", got)
-	}
-	if d := ps.SubmitPlan("  \n "); d.Result != "Error: plan cannot be empty" {
-		t.Errorf("空计划 SubmitPlan = %+v", d)
+	if _, err := ps.EnterPlan(); err == nil || err.Error() != "already in plan mode" {
+		t.Errorf("重复 EnterPlan = %v", err)
 	}
 }
 
