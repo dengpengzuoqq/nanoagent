@@ -44,15 +44,26 @@ curl -L -C - -o ~/Downloads/Qwen3-Embedding-0.6B-Q8_0.gguf \
 ### 2.2 基于下载的模型启动（AMD 集显 GPU offload）
 
 ```bash
-llama-server -m ~/Downloads/Qwen3-Embedding-0.6B-Q8_0.gguf \
-  --embeddings --port 8081 --alias qwen3-embedding -ngl 999
+llama-server \
+  -m ~/Downloads/Qwen3-Embedding-0.6B-f16.gguf \
+  --embedding \
+  --port 8081 \
+  --alias qwen3-embedding \
+  -ngl 999 \
+  -b 512 -ub 512 \
+  -c 2048 \
+  -np 1 \
+  --api-key local
 ```
 
-- `-m`：加载本地 GGUF 文件（不联网）；换 f16 版本只需替换文件路径
-- `-ngl 999`：全部层 offload 到 AMD 集显（Vulkan 后端，RADV/RENOIR）
-- **显存**：集显为 UMA 共享内存，已分配 8GB——Q8_0（610 MB）或 f16（1142 MB）权重加 KV cache 远小于 8GB，无压力；集显"显存"就是系统内存，没有独显的容量与带宽限制
-- `--embeddings`：只启用 embedding 模式（Qwen3-Embedding 使用 last-token pooling，llama.cpp 按 GGUF 元数据自动处理）
+- `-m`：加载本地 GGUF 文件（不联网）；换 Q8_0 版本只需替换文件路径
+- `--embedding`：只启用 embedding 模式（Qwen3-Embedding 使用 last-token pooling，llama.cpp 按 GGUF 元数据自动处理）
 - `--alias qwen3-embedding`：给模型稳定名字，供 `/v1/embeddings` 请求的 `model` 字段使用
+- `-ngl 999`：全部层 offload 到 AMD 集显（Vulkan 后端，RADV/RENOIR）——集显为 UMA 共享内存，已分配 8GB，Q8_0（610 MB）或 f16（1142 MB）权重加 KV cache 远小于 8GB，无压力
+- `-b 512 -ub 512`：物理批与微批同为 512，保持一致——embedding 模式要求整段输入在单个微批内处理
+- `-c 2048`：上下文长度，短文本嵌入场景足够
+- `-np 1`：单并行槽位，嵌入服务无需多序列并行
+- `--api-key local`：请求鉴权 key，需与第 4 节 `OPENAI_EMBEDDINGS_API_KEY` 一致
 - 另有 `-hf Qwen/Qwen3-Embedding-0.6B-GGUF:F16` 自动下载模式，但主线按"先下载、后启动"操作，便于离线使用与版本固定
 
 **offload 验证**：启动日志出现 `... assigned to device Vulkan0`（张量已分配到集显）且 `/v1/embeddings` 正常返回向量即成功。若日志完全无 Vulkan 字样，说明当前 llama-server 不是 Vulkan 构建，回到第 1 节换 Vulkan 版。
@@ -62,6 +73,7 @@ llama-server -m ~/Downloads/Qwen3-Embedding-0.6B-Q8_0.gguf \
 ```bash
 curl -s http://127.0.0.1:8081/v1/embeddings \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer local" \
   -d '{"model":"qwen3-embedding","input":"测试相似度检索"}' | head -c 200
 ```
 
