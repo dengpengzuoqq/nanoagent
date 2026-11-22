@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -135,17 +134,23 @@ const respFunctionCall = `{"id":"resp_1","object":"response","created_at":1,"sta
 const respFinalText = `{"id":"resp_2","object":"response","created_at":1,"status":"completed","model":"m","output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"all done","annotations":[]}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
 
 // TestRunLoop：首轮 function_call 触发工具执行，次轮纯文本结束。验证 instructions 仅首轮发送、
-// 次轮带 previous_response_id 指向上一轮 id，且结束时写出 memory。
+// 次轮带 previous_response_id 指向上一轮 id，进度与工具结果经注入的 Out/Err 输出。
+// memory 写入是 main 的职责（AppendMemory 另有单测），Run 只返回最终回答。
 func TestRunLoop(t *testing.T) {
-	t.Chdir(t.TempDir())
+	rt := config.Load(t.TempDir())
 	collector, client := fakeResponsesServer(t, []string{respFunctionCall, respFinalText})
+	rt.Client = client // Runtime 的 client 可整体替换：这就是 config seam 的第二个 adapter
+	out, errW := &bytes.Buffer{}, &bytes.Buffer{}
 
-	if got := Run("say hi", Options{
-		Client:  client,
+	got := Run("say hi", Options{
+		Runtime: rt,
 		MaxIter: 3,
 		Timeout: 10 * time.Second,
 		Plan:    plan.NewState(false),
-	}); got != "all done" {
+		Out:     out,
+		Err:     errW,
+	})
+	if got != "all done" {
 		t.Errorf("Run 最终回答 = %q, want %q", got, "all done")
 	}
 	if n := collector.count(); n != 2 {
@@ -160,28 +165,29 @@ func TestRunLoop(t *testing.T) {
 	if got, _ := collector.at(1)["previous_response_id"].(string); got != "resp_1" {
 		t.Errorf("次轮 previous_response_id = %q, want resp_1", got)
 	}
-	mem, err := os.ReadFile(config.MemoryPath)
-	if err != nil {
-		t.Fatalf("应写出 %s: %v", config.MemoryPath, err)
+	if !strings.Contains(out.String(), `[Tool-call_1] bash(`) {
+		t.Errorf("Out 应包含工具调用进度，实际: %q", out.String())
 	}
-	for _, want := range []string{"say hi", "all done"} {
-		if !strings.Contains(string(mem), want) {
-			t.Errorf("memory 缺少 %q，实际: %q", want, mem)
-		}
+	if !strings.Contains(errW.String(), "[Result-call_1]") || !strings.Contains(errW.String(), "hi") {
+		t.Errorf("Err 应包含工具结果原文，实际: %q", errW.String())
 	}
 }
 
-// TestRunMaxIterations：模型一直请求工具时，达到 --max-iter 即返回 "Max iterations reached"。
+// TestRunMaxIterations：模型一直请求工具时，达到 MaxIter 即返回 "Max iterations reached"。
 func TestRunMaxIterations(t *testing.T) {
-	t.Chdir(t.TempDir())
+	rt := config.Load(t.TempDir())
 	collector, client := fakeResponsesServer(t, []string{respFunctionCall})
+	rt.Client = client
 
-	if got := Run("loop", Options{
-		Client:  client,
+	got := Run("loop", Options{
+		Runtime: rt,
 		MaxIter: 2,
 		Timeout: 10 * time.Second,
 		Plan:    plan.NewState(false),
-	}); got != "Max iterations reached" {
+		Out:     &bytes.Buffer{},
+		Err:     &bytes.Buffer{},
+	})
+	if got != "Max iterations reached" {
 		t.Errorf("Run 超限回答 = %q, want %q", got, "Max iterations reached")
 	}
 	if n := collector.count(); n != 2 {

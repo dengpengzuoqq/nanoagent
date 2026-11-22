@@ -4,6 +4,7 @@ package config
 import (
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -56,15 +57,34 @@ func LoadNanoAgentsMD(path string) string {
 	return content
 }
 
-// 运行时文件与目录布局，全部相对路径集中在此；运行必须在项目根目录。
-const (
-	NanoAgentsMD  = "./nanoagents.md"         // system prompt 注入的项目说明
-	RulesDir      = "./.nanoagents/rules"     // 规则全文 .nanoagents/rules/*.md
-	SkillsDir     = "./.nanoagents/skills"    // 技能列表 .nanoagents/skills/*.json
-	MemoryPath    = "./.nanoagents/memory.md" // 跨任务记忆
-	MCPConfigPath = "./.nanoagents/mcp.json"  // MCP server 配置
-	TestEnvPath   = "./test.env"              // OpenAI 配置
-)
+// Paths 是运行时文件与目录的布局定义（相对 root）。
+type Paths struct {
+	NanoAgentsMD  string // system prompt 注入的项目说明
+	RulesDir      string // 规则全文 .nanoagents/rules/*.md
+	SkillsDir     string // 技能列表 .nanoagents/skills/*.json
+	MemoryPath    string // 跨任务记忆
+	MCPConfigPath string // MCP server 配置
+}
+
+func (p Paths) join(root string) Paths {
+	j := func(rel string) string { return filepath.Join(root, rel) }
+	return Paths{
+		NanoAgentsMD:  j(p.NanoAgentsMD),
+		RulesDir:      j(p.RulesDir),
+		SkillsDir:     j(p.SkillsDir),
+		MemoryPath:    j(p.MemoryPath),
+		MCPConfigPath: j(p.MCPConfigPath),
+	}
+}
+
+// relativePaths 是相对 root 的布局定义，Load 负责拼接成绝对路径。
+var relativePaths = Paths{
+	NanoAgentsMD:  "nanoagents.md",
+	RulesDir:      ".nanoagents/rules",
+	SkillsDir:     ".nanoagents/skills",
+	MemoryPath:    ".nanoagents/memory.md",
+	MCPConfigPath: ".nanoagents/mcp.json",
+}
 
 // RuntimeConfig 是 test.env 的解析结果（对应键：OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL）。
 type RuntimeConfig struct {
@@ -82,11 +102,24 @@ func newConfig(env map[string]string) RuntimeConfig {
 	}
 }
 
-// Config 是全局运行配置；Client 是 OpenAI 兼容 Responses API 客户端（BaseURL 留空时用 SDK 默认地址）。
-var (
-	Config = newConfig(loadEnv(TestEnvPath))
-	Client = newClient(Config)
-)
+// Runtime 是一次运行所需的全部环境：配置、路径布局与 API client。
+// main 用 Load(".") 构造（生产行为等同旧的相对路径）；测试用 Load(t.TempDir())。
+type Runtime struct {
+	Config RuntimeConfig
+	Paths  Paths
+	Client openai.Client
+}
+
+// Load 读取 root 下的 test.env，拼接路径布局并构造 client。
+// 配置文件缺失返回空配置（不退出），由调用方校验必需键。
+func Load(root string) Runtime {
+	cfg := newConfig(loadEnv(filepath.Join(root, "test.env")))
+	return Runtime{
+		Config: cfg,
+		Client: newClient(cfg),
+		Paths:  relativePaths.join(root),
+	}
+}
 
 func newClient(cfg RuntimeConfig) openai.Client {
 	opts := []option.RequestOption{option.WithAPIKey(cfg.APIKey)}
@@ -96,10 +129,10 @@ func newClient(cfg RuntimeConfig) openai.Client {
 	return openai.NewClient(opts...)
 }
 
-// ModelOrDefault 返回配置的模型名，未配置时回退到 gpt-4o-mini。
-func ModelOrDefault() string {
-	if Config.Model != "" {
-		return Config.Model
+// Model 返回配置的模型名，未配置时回退到 gpt-4o-mini。
+func (r Runtime) Model() string {
+	if r.Config.Model != "" {
+		return r.Config.Model
 	}
 	return "gpt-4o-mini"
 }

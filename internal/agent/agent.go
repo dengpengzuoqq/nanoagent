@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -69,20 +70,30 @@ func dispatchTool(name, argsJSON string, mcpRegistry map[string]mcp.Tool, timeou
 	}
 }
 
-// Options 聚合 Run 的运行参数。
+// Options 聚合 Run 的运行参数与依赖。
 type Options struct {
-	Client   openai.Client // OpenAI 兼容 Responses API 客户端（生产传 config.Client，测试传测试服务的客户端）
-	MaxIter  int           // 最大迭代轮数
-	Timeout  time.Duration // 工具单次调用超时
-	MCPTools []mcp.Tool    // 已注册的 MCP 工具
-	Plan     *plan.State   // 计划模式状态与守卫
+	Runtime  config.Runtime // 运行环境：配置、路径布局、API client
+	MaxIter  int            // 最大迭代轮数
+	Timeout  time.Duration  // 工具单次调用超时
+	MCPTools []mcp.Tool     // 已注册的 MCP 工具
+	Plan     *plan.State    // 计划模式状态
+	Out      io.Writer      // 进度输出（[Tool-] 行）；nil 时用 os.Stdout
+	Err      io.Writer      // 工具结果原文输出（[Result-] 行）；nil 时用 os.Stderr
 }
 
 // Run 执行一次任务：组装工具表与 system prompt，循环调用 Responses API 直到没有工具调用、
-// 达到 MaxIter 或计划模式 fail-closed 终止；结束时把 task 与最终结果写入 memory。
+// 达到 MaxIter 或计划模式 fail-closed 终止，返回最终回答。跨任务记忆由调用方写入。
 func Run(userMessage string, opts Options) string {
-	client, maxIterations, timeout, ps := opts.Client, opts.MaxIter, opts.Timeout, opts.Plan
+	rt := opts.Runtime
+	client, maxIterations, timeout, ps := rt.Client, opts.MaxIter, opts.Timeout, opts.Plan
 	mcpTools := opts.MCPTools
+	out, errW := opts.Out, opts.Err
+	if out == nil {
+		out = os.Stdout
+	}
+	if errW == nil {
+		errW = os.Stderr
+	}
 	config.Logger.Debug("run_agent 启动", "user_message", userMessage, "max_iterations", maxIterations)
 	// 本地工具 + 计划模式工具 + MCP 工具并入工具表，注册名 -> 工具 的映射用于分发
 	toolList := append([]responses.ToolUnionParam{}, tools.LocalTools...)
@@ -92,7 +103,7 @@ func Run(userMessage string, opts Options) string {
 		toolList = append(toolList, tools.FunctionTool(t.Registered, t.Description, t.Schema))
 		mcpRegistry[t.Registered] = t
 	}
-	systemPrompt := prompt.BuildSystemPrompt()
+	systemPrompt := prompt.BuildSystemPrompt(rt)
 	if ps.Active {
 		// --plan 入口：enter reminder 注入首轮 instructions（入口② enter_plan 经 tool result 注入）
 		systemPrompt += "\n\n" + plan.PlanEnterReminder
@@ -106,7 +117,7 @@ func Run(userMessage string, opts Options) string {
 		}},
 	}
 	previousResponseID := ""
-	model := config.ModelOrDefault()
+	model := rt.Model()
 	finalText := ""
 	reachedLimit := true // 循环跑完仍没等到"无工具调用"的回答，即为达到上限
 loop:
@@ -148,7 +159,7 @@ loop:
 		}
 		nextItems := responses.ResponseInputParam{}
 		for _, call := range toolCalls {
-			fmt.Printf("[Tool-%s] %s(%s)\n", call.CallID, call.Name, call.Arguments)
+			fmt.Fprintf(out, "[Tool-%s] %s(%s)\n", call.CallID, call.Name, call.Arguments)
 			config.Logger.Debug("执行工具", "name", call.Name, "call_id", call.CallID)
 			result := dispatchTool(call.Name, call.Arguments, mcpRegistry, timeout, ps)
 			// 非 TTY 未传 --auto-approve：fail-closed，立即终止整个运行
@@ -157,8 +168,8 @@ loop:
 				reachedLimit = false
 				break loop
 			}
-			// 工具结果原文直写 stderr，不经 slog 转义
-			fmt.Fprintf(os.Stderr, "[Result-%s] %s\n%s\n", call.CallID, call.Name, result)
+			// 工具结果原文直写 errW，不经 slog 转义
+			fmt.Fprintf(errW, "[Result-%s] %s\n%s\n", call.CallID, call.Name, result)
 			// 工具结果以 function_call_output 条目回填，call_id 必须一一对应
 			nextItems = append(nextItems, responses.ResponseInputItemUnionParam{
 				OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
@@ -178,7 +189,5 @@ loop:
 		config.Logger.Debug("达到最大迭代次数，退出循环", "max_iterations", maxIterations)
 		finalText = "Max iterations reached"
 	}
-	// 跨任务记忆：无论成功或达到上限，都把 task 与最终结果写入 memory
-	prompt.AppendMemory(config.MemoryPath, userMessage, finalText)
 	return finalText
 }

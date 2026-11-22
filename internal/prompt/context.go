@@ -15,16 +15,16 @@ import (
 
 // BuildSystemPrompt 组装 system prompt，顺序固定：
 // 基础指令 + nanoagents.md + rules 全文 + skills 列表 + memory 末段。
-func BuildSystemPrompt() string {
+func BuildSystemPrompt(rt config.Runtime) string {
 	parts := []string{"You are a helpful assistant that can interact with the system. Be concise."}
-	if md := config.LoadNanoAgentsMD(config.NanoAgentsMD); md != "" {
+	if md := config.LoadNanoAgentsMD(rt.Paths.NanoAgentsMD); md != "" {
 		parts = append(parts, "# Project Instructions (nanoagents.md)\n"+md)
 	}
-	if rules := loadRules(config.RulesDir); rules != "" {
+	if rules := loadRules(rt.Paths.RulesDir); rules != "" {
 		config.Logger.Debug("已加载规则", "chars", len(rules))
 		parts = append(parts, "# Rules\n"+rules)
 	}
-	if skills := loadSkills(config.SkillsDir); len(skills) > 0 {
+	if skills := loadSkills(rt.Paths.SkillsDir); len(skills) > 0 {
 		fmt.Printf("[Skills] Loaded %d skills\n", len(skills))
 		lines := make([]string, len(skills))
 		for i, s := range skills {
@@ -32,7 +32,7 @@ func BuildSystemPrompt() string {
 		}
 		parts = append(parts, "# Skills\n"+strings.Join(lines, "\n"))
 	}
-	if mem := loadMemory(config.MemoryPath); mem != "" {
+	if mem := loadMemory(rt.Paths.MemoryPath); mem != "" {
 		parts = append(parts, "# Previous Context\n"+mem)
 	}
 	return strings.Join(parts, "\n\n")

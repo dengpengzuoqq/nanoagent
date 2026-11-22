@@ -14,6 +14,7 @@ import (
 	"go-agent/internal/config"
 	"go-agent/internal/mcp"
 	"go-agent/internal/plan"
+	"go-agent/internal/prompt"
 )
 
 func main() {
@@ -28,8 +29,9 @@ func main() {
 Features: Memory, Rules, Skills, MCP, Plan mode`)
 		os.Exit(1)
 	}
-	if config.Config.APIKey == "" {
-		config.Logger.Error("缺少 OPENAI_API_KEY 配置（检查 ./test.env）")
+	rt := config.Load(".")
+	if rt.Config.APIKey == "" {
+		config.Logger.Error("缺少 OPENAI_API_KEY 配置（检查 test.env）")
 		os.Exit(1)
 	}
 	timeout := time.Duration(*timeoutSec) * time.Second
@@ -43,7 +45,7 @@ Features: Memory, Rules, Skills, MCP, Plan mode`)
 	// 启动 MCP server（标准配置格式；启动失败的服务跳过，不中断整体运行）
 	var mcpTools []mcp.Tool
 	var mcpClients []*mcp.Client
-	servers := mcp.LoadConfig(config.MCPConfigPath)
+	servers := mcp.LoadConfig(rt.Paths.MCPConfigPath)
 	names := make([]string, 0, len(servers))
 	for name := range servers {
 		names = append(names, name)
@@ -71,11 +73,14 @@ Features: Memory, Rules, Skills, MCP, Plan mode`)
 		}
 	}()
 
-	fmt.Println(agent.Run(task, agent.Options{
-		Client:   config.Client,
+	finalText := agent.Run(task, agent.Options{
+		Runtime:  rt,
 		MaxIter:  *maxIter,
 		Timeout:  timeout,
 		MCPTools: mcpTools,
 		Plan:     ps,
-	}))
+	})
+	// 跨任务记忆：无论成功或达到上限，都把 task 与最终结果写入 memory
+	prompt.AppendMemory(rt.Paths.MemoryPath, task, finalText)
+	fmt.Println(finalText)
 }

@@ -98,15 +98,15 @@ func TestAppendMemory(t *testing.T) {
 
 // TestBuildSystemPrompt 端到端验证 .nanoagents/ 布局下各段的注入内容与顺序。
 func TestBuildSystemPrompt(t *testing.T) {
-	t.Chdir(t.TempDir())
-	os.MkdirAll(config.RulesDir, 0o755)
-	os.MkdirAll(config.SkillsDir, 0o755)
-	os.WriteFile(config.NanoAgentsMD, []byte("project rules here"), 0o644)
-	os.WriteFile(config.RulesDir+"/coding.md", []byte("use go"), 0o644)
-	os.WriteFile(config.SkillsDir+"/deploy.json", []byte(`{"name":"deploy","description":"Deploy the app"}`), 0o644)
-	os.WriteFile(config.MemoryPath, []byte("## 2026-01-01\n**Task:** old task\n"), 0o644)
+	rt := config.Load(t.TempDir())
+	os.MkdirAll(rt.Paths.RulesDir, 0o755)
+	os.MkdirAll(rt.Paths.SkillsDir, 0o755)
+	os.WriteFile(rt.Paths.NanoAgentsMD, []byte("project rules here"), 0o644)
+	os.WriteFile(rt.Paths.RulesDir+"/coding.md", []byte("use go"), 0o644)
+	os.WriteFile(rt.Paths.SkillsDir+"/deploy.json", []byte(`{"name":"deploy","description":"Deploy the app"}`), 0o644)
+	os.WriteFile(rt.Paths.MemoryPath, []byte("## 2026-01-01\n**Task:** old task\n"), 0o644)
 
-	got := BuildSystemPrompt()
+	got := BuildSystemPrompt(rt)
 	for _, want := range []string{
 		"# Project Instructions (nanoagents.md)",
 		"project rules here",
