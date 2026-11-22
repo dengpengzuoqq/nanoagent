@@ -3,8 +3,10 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -13,8 +15,8 @@ import (
 	"go-agent/internal/agent"
 	"go-agent/internal/config"
 	"go-agent/internal/mcp"
+	"go-agent/internal/memory"
 	"go-agent/internal/plan"
-	"go-agent/internal/prompt"
 )
 
 func main() {
@@ -73,14 +75,20 @@ Features: Memory, Rules, Skills, MCP, Plan mode`)
 		}
 	}()
 
+	// 任务轨迹捕获：与 stderr 并写，供任务末记忆提取使用（不影响实时输出）
+	trace := &bytes.Buffer{}
+
 	finalText := agent.Run(task, agent.Options{
 		Runtime:  rt,
 		MaxIter:  *maxIter,
 		Timeout:  timeout,
 		MCPTools: mcpTools,
 		Plan:     ps,
+		Err:      io.MultiWriter(os.Stderr, trace),
 	})
-	// 跨任务记忆：无论成功或达到上限，都把 task 与最终结果写入 memory
-	prompt.AppendMemory(rt.Paths.MemoryPath, task, finalText)
+	// 任务末记忆提取：ADD/UPDATE/DELETE 生命周期 + 压缩 + 旧格式惰性迁移（失败静默）
+	if err := memory.Extract(rt, task, finalText, trace.String(), time.Now()); err != nil {
+		config.Logger.Warn("任务末记忆提取失败，memory 保持原样", "err", err)
+	}
 	fmt.Println(finalText)
 }

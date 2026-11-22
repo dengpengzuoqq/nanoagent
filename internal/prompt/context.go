@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"go-agent/internal/config"
 	"go-agent/internal/memory"
@@ -85,19 +84,4 @@ func loadSkills(dir string) []skillInfo {
 		skills = append(skills, s)
 	}
 	return skills
-}
-
-// AppendMemory 在任务结束后把 task 和最终结果带时间戳追加到 memory 文件；失败静默。
-// memory 位于 .nanoagents/ 子目录下，写入前先确保目录存在（OpenFile 不建父目录）。
-func AppendMemory(path, task, result string) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return
-	}
-	entry := fmt.Sprintf("\n## %s\n**Task:** %s\n**Result:** %s\n", time.Now().Format("2006-01-02 15:04:05"), task, result)
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	f.WriteString(entry)
 }
