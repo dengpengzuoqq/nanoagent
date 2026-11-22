@@ -63,7 +63,7 @@ llama-server -m ~/Downloads/Qwen3-Embedding-0.6B-Q8_0.gguf \
 - `--alias qwen3-embedding`：给模型稳定名字，供 `/v1/embeddings` 请求的 `model` 字段使用
 - 另有 `-hf Qwen/Qwen3-Embedding-0.6B-GGUF:F16` 自动下载模式，但主线按"先下载、后启动"操作，便于离线使用与版本固定
 
-**offload 验证**：启动日志出现 `... assigned to device Vulkan0`（张量已分配到集显）且 `/v1/embeddings` 正常返回向量即成功；部分融合算子（Flash Attention K/V）可能回退 CPU，属 RADV 正常现象，不影响使用。若日志完全无 Vulkan 字样，说明当前 llama-server 是 CPU-only 构建，回到第 1 节换 Vulkan 版。
+**offload 验证**：启动日志出现 `... assigned to device Vulkan0`（张量已分配到集显）且 `/v1/embeddings` 正常返回向量即成功。若日志完全无 Vulkan 字样，说明当前 llama-server 不是 Vulkan 构建，回到第 1 节换 Vulkan 版。
 
 ## 3. 验证服务
 
@@ -98,7 +98,7 @@ OPENAI_EMBEDDINGS_API_KEY=local
 |---|---|
 | 端口 8081 被占用 | 换端口启动，同步改 `OPENAI_EMBEDDINGS_BASE_URL` |
 | 模型下载慢/中断 | 换 `https://hf-mirror.com` 域名重下；`curl -C -` 支持断点续传 |
-| 启动日志 0 层 offload | llama-server 是 CPU-only 构建（Arch 仓库包），换第 1 节的 Vulkan 版 |
+| 启动日志无 Vulkan 字样 | llama-server 不是 Vulkan 构建，换第 1 节的 Vulkan 版 |
 | llama-server 停了 | `memory_search` 静默回退 bigram，agent 不中断 |
 | 中文检索效果 | Qwen3-Embedding 原生支持中文，无需分词配置 |
 | 想换更大模型 | 下载对应 GGUF 后改 `-m` 路径，`OPENAI_EMBEDDINGS_MODEL` 同步改；冒烟校验自动重新把关 |
