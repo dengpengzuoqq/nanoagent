@@ -5,3 +5,4 @@ agent
 test.env
 nanoagents.md
 debug.log
+debug/
